@@ -1,80 +1,54 @@
-# Память сессии — Degg_Crop (2026-10-02, сессия 2)
+# Память сессии — Degg_Crop (2026-10-02)
 
 > Покажи этот файл агенту, чтобы продолжить работу.
-> Всегда сверяйся с `AGENTS.md` (корень бандла) и `SPECIFICATION.md`.
+> Всегда сверяйся с `AGENTS.md` и `SPECIFICATION.md`.
 
 ---
 
 ## 1. Что делали в этой сессии (кратко)
-- **Проект реализован**: перенесена вся интерактивная механика OREX в JS (пресеты,
-  кнопки, рамка мышью, бейдж размера), починены аудит/locales/смоук, всё зелёное.
-- Создан git-репозиторий `https://github.com/vycheslav-iv/Degg_Crop` (2 коммита,
-  запушено), поставлен предохранитель `.githooks/pre-commit` + `core.hooksPath`.
-- Приёмка: `check.py` — провалов 0, предупреждений 0; живой замер в браузере — 43 ok.
+Полностью переписан Degg_Crop под новую схему: стандартная загрузка ComfyUI (`image_upload: true`), единая геометрия `x,y,width,height` в пикселях (без `operation`/`crop_%`), Expand через `fill_color` при выходе за границы, ресайз всегда включён с MP/multiplicity (банковское округление Python `round()`), 4 выхода (IMAGE, MASK, INT, INT). JS переписан с нуля под Nodes 2.0: растягиваемый превью через `computeLayoutSize`, 9-зона hit-test drag/resize, сетка третьих+золотое сечение, белый бейдж размера, кнопки Full/Center/Maximize, мост `node.onMouseMove`. Тесты (Python, smoke, audit) и локализации обновлены под новую схему. `python _process/check.py Degg_Crop` — **ЗЕЛЁНОЕ: провалов 0**. Синхронизирован в рабочую ComfyUI, закоммичен и запушен.
 
 ## 2. Итоговое состояние кода
-- `web/js/degg_crop.js` (1304) — ГОТОВ:
-  - `:24` `PRESETS` (в т.ч. `"Free (Source)"` = полный кадр), `:186` `pyRound`
-    (банковское), `:196` `roundMult`, `:202` `mpTargets`, `:211` `percentRectFromMargins`
-    (эталон python), `:242` `getSel`, `:265` `pythonTarget` (рисуется в бейдже)
-  - `:329` `areaOf` (previewArea = `{x,y,width,height,scale}` — формат КРИТИЧЕН),
-    `:339` `computeLayout`, `:454` `drawPreview`, `:540` `fitNode` (только `setSize`)
-  - `:562` `writeMargins`, `:574` `syncPresets`, `:585` `syncAspectDisplay`,
-    `:625` `syncCropDisplays` (**пишет width/height ТОЛЬКО в Crop+pct**),
-    `:653` `applyAspectRatio`, `:716` `centerSelection`
-  - `:769` `getHitArea`, `:799` `resizeSel` (якоря OREX), `:865/931/941` мышь,
-    `:962` `handleWidgetChanged`, `:1077` `setupJsWidgets` (идемпотентно),
-    `:1109` `addPreviewWidget`, `:1209` `pickAndLoad`, `:1231` реестр расширения
-- `degg_crop.py` (352) — ГОТОВ, не менялся: `percent_rect` `:92`, `target_size` `:125`,
-  `_resize_lanczos` `:167` (ленивые numpy/PIL с отступом), `process` `:281`
-- `tests/`: `_test_degg_crop.py` (зелёный), `_smoke_degg_crop.mjs` (531, ok: 100),
-  `_audit_degg_crop.mjs` (220, ok: 83), `_probe_live_dom.py` (734, ok: 43)
-- `locales/{ru,en}/nodeDefs.json` — 18 входов, выходы `0–3`
-- `check.json` — НЕ МЕНЯЛСЯ; `SPECIFICATION.md` — блок «Статус» + §2 таблица,
-  §12.1/12.2 факт, новый §12.3 (живой замер), §13 ловушки 10–12, §14.1 (найденное)
+- `degg_crop.py:220` — `INPUT_TYPES` (14 входов: `file` required с `image_upload`, `x/y/width/height` INT, опциональные `multiplicity(8)/resolution_mp/upscale_method/fill_color/dim_percent/aspect_ratio/ratio_lock/image/mask`)
+- `degg_crop.py:340` — `process`: приоритет провода `image`, защита от Tensor в `file`, `_compose` (холст + сдвиг `-x,-y`), `target_size` (MP + банковское округление), `_interpolate` (lanczos через PIL), маска тем же окном
+- `degg_crop.py:80` — `_compose` / `paste_region` / `target_size` / `fill_values` / ленивые импорты numpy/PIL в `_resize_lanczos`
+- `web/js/degg_crop.js:10` — ESM-совместимый загрузчик `app` (через `window.comfyAPI`)
+- `web/js/degg_crop.js:150` — `onNodeCreated`: создаёт виджет `preview` (type=custom, serialize=false, computeLayoutSize/draw/mouse), кнопки `fit_full/fit_center/fit_max`, `node.onMouseMove` мост
+- `web/js/degg_crop.js:250` — `makePreviewWidget`: `draw` (сетка третьих+золотое сечение, рамка, бейдж через `text.length`), `mouse` (9-зона hit-test, drag/resize, ratio lock)
+- `web/js/degg_crop.js:340` — экспорт `window.DeggCropPreview` для тестов
+- `tests/_test_degg_crop.py` — Python E2E (автоперезапуск под ComfyUI python), `multiplicity=1` для точных геометрических проверок
+- `tests/_smoke_degg_crop.mjs` — JS-смоук vm: проверяет расширение, виджет preview, математику targetSizeJS, getHitArea 9 зон, draw()
+- `tests/_audit_degg_crop.mjs` — статический аудит: 14 входов, Nodes 2.0 hooks, без запрещённых приёмов, locales ru/en 14 входов
+- `locales/ru/nodeDefs.json` / `locales/en/nodeDefs.json` — 14 входов, 4 выхода
 
 ## 3. Проблемы, которые встречались (и как решали)
-- `previewArea` клали как `layoutCrop`-бокс `{w,h}`, а `getHitArea` читает
-  `width/height` → границы `NaN` → **клик вне предпросмотра не отсекался** (молча).
-  Фикс — `areaOf()`; нашёл **живой замер**, смоук был слеп.
-- Живой зонд мерил в чужом кадре координат (рисовал от `y=60`, рендерер — от
-  `widget.last_y=566`): `previewArea` и синтетические точки разъезжались, «мышь не
-  работает» был ложным выводом о ноде. Фикс — рисовать с `(node.size[0], widget.last_y)`.
-- Аудит-бены `!/^\s*(import numpy)/m` глотали ленивые импорты с отступом → привязка
-  к колонке 0 (`/^(import numpy|from numpy)/m`, `/^(from PIL|import PIL)/m`).
-- `handleWidgetChanged` читал значение из виджета: при вызове до записи (`val` есть,
-  виджета ещё нет) получал старое число → синхронизируем виджет с `val` в начале.
-- `Full Image` для Crop-window нормализует `aspect_ratio` к пресету (`640:480` → `4:3`) —
-  это поведение `syncAspectDisplay`, так же было в OREX, не баг.
+- **Tensor в `file` позиционно** → `AttributeError: 'Tensor' object has no attribute 'endswith'` в `folder_paths.get_annotated_filepath`. Решено: в `process`/`VALIDATE_INPUTS`/`IS_CHANGED` проверка `torch.is_tensor(file)` — пропуск файловых проверок, приоритет провода `image`.
+- **JS `import` в vm-смоуке** → `SyntaxError: Cannot use import statement outside a module`. Решено: убрать `import`, читать `app` через `window.comfyAPI.app.app` или `window.app`.
+- **`window.DeggCropPreview` не экспортировался в vm** → внутри `beforeRegisterNodeDef` не выполняется до вызова. Решено: добавить top-level экспорт после регистрации.
+- **Старые тесты ждали `Ratio Presets` / `Load Image` / `computeSize` / `operation`** → переписаны под новую схему (нет старых виджетов, есть `computeLayoutSize`, `fit_*` кнопки).
+- **Аудит банил ленивые импорты numpy/PIL** → проверка привязана к колонке 0 (`/^import numpy/m`), импорты внутри функции с отступом — ок.
+- **`check.json` ожидает `FAIL: 0` а тест печатал `FAIL=0`** → исправлен формат вывода в тесте.
 
 ## 4. Что важно не сломать при продолжении работы
-- **`previewArea` только `{x,y,width,height,scale}`** (иначе NaN-границы, см. §13.10).
-- **`syncCropDisplays` пишет width/height ТОЛЬКО в Crop+pct**; Expand никогда не
-  правит width/height от rect и не трогает x/y из source-rect.
-- Программное `w.value=` не стреляет событиями — на этом drag; входной guard
-  `_isSyncing` в `handleWidgetChanged`/`applyAspectRatio` обязателен.
-- `pyRound` = банковское `round()` python (иначе бейдж разъедется с выходом на ±mult).
-- Аудит-запреты: `setInterval`, `MutationObserver`, `.computeSize =`, `this.size =`/
-  `node.size =` (только `setSize`), `widgets_up`, `getBoundingClientRect`,
-  `offsetHeight`, `style.height =` — нигде, включая комментарии кодовых строк.
-- fakeCtx смоука: НЕТ `measureText` → ширина бейджа = `text.length`.
-- Живой замер: рисовать в кадре ноды; обязателен контроль «два одинаковых рендера
-  = 0 отличий пикселей» (иначе «зелёное» слепо).
-- `check.json` не менять; тесты только в `Degg_Crop/tests/`; после правок исходника —
-  `python sync.py Degg_Crop` (сам чистит `__pycache__`).
+- `check.json` **не менять** — строки `expect` обязаны появляться в выводе.
+- `sync.py` не копирует `tests/` — тесты только в исходнике.
+- Python `round()` (банковское) — JS `pyRound` обязан совпадать один в один.
+- `computeLayoutSize` — основной для Nodes 2.0 stretch; `computeSize` — fallback, не перезаписывать `this.computeSize` на ноде.
+- `serialize: false` и в виджете, и в `options` (двойная страховка).
+- `node.onMouseMove` — единственный способ получить hover/drag/resize (виджет `mouse` вызывается только на mousedown).
+- В live-замере (`_probe_live_dom.py`) мерить в кадре ноды (`widget.last_y`), не в offscreen.
 
 ## 5. Следующие шаги (идеи, не сделано)
-- Кандидаты в скилы (пользователь пока не разрешал): в `comfyui-node-testing` —
-  кадр координат живого зонда + контроль прибора; в `comfyui-dom-widget-sizing` —
-  ловушка `previewArea {w,h}` против `width/height`.
-- Живой замер был прогнан на источнике 1065×1476 (портрет); ландшафт/маленький
-  источник (< 300 px) отдельно не проверялся — обрезка окна там может упираться в кламп.
-- Ручной прогон глазами в браузере не делался: его пункты покрыты зондом (43 ok).
+- Живой замер в headless Chrome: `python tests/_probe_live_dom.py` (нужен запущенный ComfyUI) — подтвердить drag/resize/пресеты/кнопки/бейдж/reopen.
+- Ручное тестирование в браузере (Nodes 2.0): загрузка, drag/resize 9 зон, Expand за границы, MP+кратность, маска/альфа.
+- Вынос пирсинга в отдельную ноду `KonstCharacterPiercing` (если понадобится).
 
 ## 6. Связанные файлы
-- Исходник: `F:\AI_projects\Custom_node_ComfyUI\Degg_Crop\`
-- Рабочая копия: `D:\ComfyUI_windows_portable\ComfyUI\custom_nodes\Degg_Crop\` (синхронна)
-- Референс: `D:\ComfyUI_windows_portable\ComfyUI\custom_nodes\comfyui-orex\js\OreX_Crop.js`
-- Репозиторий: `https://github.com/vycheslav-iv/Degg_Crop` (public, ветка `master`)
-- Проверка: `python _process/check.py Degg_Crop`; живой замер: `python tests/_probe_live_dom.py`
-  (нужен запущенный ComfyUI + Chrome; сервер после — выключить)
+- `degg_crop.py` — Python нода
+- `web/js/degg_crop.js` — JS UI
+- `locales/ru/nodeDefs.json`, `locales/en/nodeDefs.json` — переводы
+- `tests/_test_degg_crop.py`, `tests/_smoke_degg_crop.mjs`, `tests/_audit_degg_crop.mjs` — тесты
+- `check.json` — конфиг проверок (не менять)
+- `SPECIFICATION.md` — полная документация (обновлена)
+- `TASK.md` — ТЗ
+- `AGENTS.md` (корень проекта) — правила

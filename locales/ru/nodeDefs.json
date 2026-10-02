@@ -7,7 +7,7 @@
       "width": { "name": "ширина" },
       "height": { "name": "высота" },
       "multiplicity": { "name": "кратность" },
-      "resolution_mp": { "name": "разрешение (MP)" },
+      "megapixels": { "name": "мегапиксели" },
       "upscale_method": { "name": "метод апскейла" },
       "fill_color": { "name": "заливка" },
       "dim_percent": { "name": "затемнение, %" },

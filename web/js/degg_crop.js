@@ -1,15 +1,53 @@
+console.log("[DeggCrop] === SCRIPT START ===");
+console.log("[DeggCrop] window.comfyAPI:", !!window.comfyAPI);
+console.log("[DeggCrop] window.comfyAPI?.app:", !!window.comfyAPI?.app);
+console.log("[DeggCrop] window.comfyAPI?.app?.app:", !!window.comfyAPI?.app?.app);
+console.log("[DeggCrop] window.app:", !!window.app);
+
 let app;
 if (window.comfyAPI && window.comfyAPI.app && window.comfyAPI.app.app) {
   app = window.comfyAPI.app.app;
+  console.log("[DeggCrop] Got app from comfyAPI.app.app");
 } else if (window.app) {
   app = window.app;
+  console.log("[DeggCrop] Got app from window.app");
+} else {
+  console.log("[DeggCrop] NO APP FOUND!");
 }
+
+console.log("[DeggCrop] app:", !!app, "registerExtension:", !!(app && app.registerExtension));
 
 const EXT_NAME = "DeggCrop";
 
 const PREVIEW_H = 160;
 const PREVIEW_PAD = 8;
 const GOLDEN_RATIO = 1.61803398875;
+
+const RATIO_PRESETS = [
+  "Custom",
+  "Free (Source)",
+  "1:1",
+  "4:3",
+  "3:4",
+  "16:9",
+  "9:16",
+  "2:3",
+  "3:2",
+  "21:9"
+];
+
+function parseRatio(r) {
+  if (!r || r === "Custom") return 1;
+  if (r === "Free (Source)") return 1;
+  const parts = String(r).split(/[:/]/);
+  if (parts.length === 2) {
+    const a = parseFloat(parts[0]);
+    const b = parseFloat(parts[1]);
+    if (a > 0 && b > 0) return a / b;
+  }
+  const v = parseFloat(r);
+  return isNaN(v) ? 1 : v;
+}
 
 function getHitArea(node, x, y) {
   if (!node._dragRect) return "none";
@@ -29,14 +67,6 @@ function getHitArea(node, x, y) {
   if (bottom) return "s";
   return "move";
 }
-
-const CURSORS = {
-  nw: "nwse-resize", ne: "nesw-resize",
-  sw: "nesw-resize", se: "nwse-resize",
-  n: "ns-resize", s: "ns-resize",
-  w: "ew-resize", e: "ew-resize",
-  move: "move", none: "crosshair"
-};
 
 function syncPropsFromWidgets(node) {
   const w = node.widgets;
@@ -70,13 +100,13 @@ function syncWidgetsFromProps(node) {
 }
 
 function drawPreview(node, ctx, canvasWidth, canvasHeight) {
-  if (!node._dragRect) return;
+  if (!node._dragRect || !node._imgW || !node._imgH) return;
   const r = node._dragRect;
-  const scaleX = (canvasWidth - 2 * PREVIEW_PAD) / Math.max(1, node._imgW || 1);
-  const scaleY = (PREVIEW_H - 2 * PREVIEW_PAD) / Math.max(1, node._imgH || 1);
+  const scaleX = (canvasWidth - 2 * PREVIEW_PAD) / Math.max(1, node._imgW);
+  const scaleY = (PREVIEW_H - 2 * PREVIEW_PAD) / Math.max(1, node._imgH);
   const scale = Math.min(scaleX, scaleY);
-  const drawW = Math.max(1, (node._imgW || 1) * scale);
-  const drawH = Math.max(1, (node._imgH || 1) * scale);
+  const drawW = Math.max(1, node._imgW * scale);
+  const drawH = Math.max(1, node._imgH * scale);
   const ox = PREVIEW_PAD + (canvasWidth - 2 * PREVIEW_PAD - drawW) / 2;
   const oy = PREVIEW_PAD + (PREVIEW_H - 2 * PREVIEW_PAD - drawH) / 2;
 
@@ -106,11 +136,12 @@ function drawPreview(node, ctx, canvasWidth, canvasHeight) {
 }
 
 function drawGridThirds(node, ctx, canvasWidth, canvasHeight) {
-  const scaleX = (canvasWidth - 2 * PREVIEW_PAD) / Math.max(1, node._imgW || 1);
-  const scaleY = (PREVIEW_H - 2 * PREVIEW_PAD) / Math.max(1, node._imgH || 1);
+  if (!node._imgW || !node._imgH) return;
+  const scaleX = (canvasWidth - 2 * PREVIEW_PAD) / Math.max(1, node._imgW);
+  const scaleY = (PREVIEW_H - 2 * PREVIEW_PAD) / Math.max(1, node._imgH);
   const scale = Math.min(scaleX, scaleY);
-  const drawW = Math.max(1, (node._imgW || 1) * scale);
-  const drawH = Math.max(1, (node._imgH || 1) * scale);
+  const drawW = Math.max(1, node._imgW * scale);
+  const drawH = Math.max(1, node._imgH * scale);
   const ox = PREVIEW_PAD + (canvasWidth - 2 * PREVIEW_PAD - drawW) / 2;
   const oy = PREVIEW_PAD + (PREVIEW_H - 2 * PREVIEW_PAD - drawH) / 2;
 
@@ -155,7 +186,7 @@ function computePreviewHeight(node) {
 
 function computeLayoutSize(node, minWidth, minHeight, maxWidth, maxHeight) {
   const w = Math.max(minWidth, Math.min(maxWidth, node.size[0] || 300));
-  const h = Math.max(minHeight, Math.min(maxHeight, PREVIEW_H + 40));
+  const h = Math.max(minHeight, Math.min(maxHeight, PREVIEW_H + 60));
   return [w, h];
 }
 
@@ -166,7 +197,7 @@ function makePreviewWidget(node) {
     serialize: false,
     options: {
       computeSize: () => [node.size[0] || 300, PREVIEW_H],
-      computeLayoutSize: () => computeLayoutSize(node, 200, PREVIEW_H + 40, 800, PREVIEW_H + 200),
+      computeLayoutSize: () => computeLayoutSize(node, 200, PREVIEW_H + 60, 800, PREVIEW_H + 200),
       draw: (ctx, node, widget) => {
         if (node._imgW && node._imgH) {
           drawGridThirds(node, ctx, widget.size[0], widget.size[1]);
@@ -181,13 +212,13 @@ function makePreviewWidget(node) {
         }
       },
       mouse: (e, pos, node, widget) => {
-        if (!node._dragRect) return false;
+        if (!node._dragRect || !node._imgW || !node._imgH) return false;
         const r = node._dragRect;
-        const scaleX = (widget.size[0] - 2 * PREVIEW_PAD) / Math.max(1, node._imgW || 1);
-        const scaleY = (PREVIEW_H - 2 * PREVIEW_PAD) / Math.max(1, node._imgH || 1);
+        const scaleX = (widget.size[0] - 2 * PREVIEW_PAD) / Math.max(1, node._imgW);
+        const scaleY = (PREVIEW_H - 2 * PREVIEW_PAD) / Math.max(1, node._imgH);
         const scale = Math.min(scaleX, scaleY);
-        const drawW = Math.max(1, (node._imgW || 1) * scale);
-        const drawH = Math.max(1, (node._imgH || 1) * scale);
+        const drawW = Math.max(1, node._imgW * scale);
+        const drawH = Math.max(1, node._imgH * scale);
         const ox = PREVIEW_PAD + (widget.size[0] - 2 * PREVIEW_PAD - drawW) / 2;
         const oy = PREVIEW_PAD + (PREVIEW_H - 2 * PREVIEW_PAD - drawH) / 2;
         const rx = ox + r.x * scale;
@@ -219,12 +250,18 @@ function makePreviewWidget(node) {
           if (mode === "move") { nx = rs.x + dx; ny = rs.y + dy; }
 
           if (node._ratioLock && node._aspect !== "Custom") {
-            const ar = parseFloat(node._aspect) || (nw / nh);
+            const ar = parseRatio(node._aspect) || (nw / nh);
             if (mode.includes("e") || mode.includes("w")) {
               nh = Math.max(1, nw / ar);
             } else {
               nw = Math.max(1, nh * ar);
             }
+          }
+          if (!node._isExpandMode) {
+            nx = Math.max(0, Math.min(node._imgW - nw, nx));
+            ny = Math.max(0, Math.min(node._imgH - nh, ny));
+            nw = Math.min(nw, node._imgW - nx);
+            nh = Math.min(nh, node._imgH - ny);
           }
           node._dragRect = { x: nx, y: ny, w: nw, h: nh };
           syncWidgetsFromProps(node);
@@ -243,6 +280,45 @@ function makePreviewWidget(node) {
   };
 }
 
+function addRatioPresetsWidget(node) {
+  const w = node.widgets;
+  const existing = w.find(v => v.name === "ratio_preset");
+  if (existing) return existing;
+  
+  const arWidget = w.find(v => v.name === "aspect_ratio");
+  const arIdx = w.findIndex(v => v.name === "aspect_ratio");
+  
+  const presetWidget = {
+    name: "ratio_preset",
+    type: "combo",
+    value: "Custom",
+    options: {
+      values: RATIO_PRESETS,
+      callback: (value, node) => {
+        const arWidget = node.widgets.find(w => w.name === "aspect_ratio");
+        const lockWidget = node.widgets.find(w => w.name === "ratio_lock");
+        if (value === "Custom") {
+          if (lockWidget) lockWidget.value = false;
+        } else if (value === "Free (Source)") {
+          if (arWidget && node._imgW && node._imgH) arWidget.value = node._imgW + ":" + node._imgH;
+          if (lockWidget) lockWidget.value = true;
+        } else {
+          if (arWidget) arWidget.value = value;
+          if (lockWidget) lockWidget.value = true;
+        }
+        applyAspectRatio(node, arWidget ? arWidget.value : "Custom");
+      }
+    }
+  };
+  
+  if (arIdx >= 0) {
+    w.splice(arIdx + 1, 0, presetWidget);
+  } else {
+    w.push(presetWidget);
+  }
+  return presetWidget;
+}
+
 function addFullCenterMaxButtons(node) {
   const w = node.widgets;
   const addBtn = (name, label, cb) => {
@@ -255,7 +331,9 @@ function addFullCenterMaxButtons(node) {
   addBtn("fit_full", "Full image", (node) => {
     if (node._imgW && node._imgH) {
       node._dragRect = { x: 0, y: 0, w: node._imgW, h: node._imgH };
+      node._isExpandMode = false;
       syncWidgetsFromProps(node);
+      updateRatioPreset(node);
     }
   });
   addBtn("fit_center", "Center", (node) => {
@@ -264,7 +342,9 @@ function addFullCenterMaxButtons(node) {
       const cx = (node._imgW - r.w) / 2;
       const cy = (node._imgH - r.h) / 2;
       node._dragRect = { x: Math.max(0, Math.round(cx)), y: Math.max(0, Math.round(cy)), w: r.w, h: r.h };
+      node._isExpandMode = false;
       syncWidgetsFromProps(node);
+      updateRatioPreset(node);
     }
   });
   addBtn("fit_max", "Maximize", (node) => {
@@ -272,12 +352,145 @@ function addFullCenterMaxButtons(node) {
       const r = node._dragRect;
       const scale = Math.min(node._imgW / r.w, node._imgH / r.h);
       node._dragRect = { x: 0, y: 0, w: Math.round(r.w * scale), h: Math.round(r.h * scale) };
+      node._isExpandMode = false;
       syncWidgetsFromProps(node);
+      updateRatioPreset(node);
+    }
+  });
+}
+
+function updateRatioPreset(node) {
+  const presetWidget = node.widgets.find(w => w.name === "ratio_preset");
+  const arWidget = node.widgets.find(w => w.name === "aspect_ratio");
+  if (!presetWidget || !arWidget || !node._imgW || !node._imgH) return;
+  
+  const ar = arWidget.value;
+  const found = RATIO_PRESETS.find(p => p !== "Custom" && p !== "Free (Source)" && parseRatio(p) === parseRatio(ar));
+  if (found) {
+    presetWidget.value = found;
+  } else if (ar === (node._imgW + ":" + node._imgH)) {
+    presetWidget.value = "Free (Source)";
+  } else {
+    presetWidget.value = "Custom";
+  }
+}
+
+function applyAspectRatio(node, arValue) {
+  if (!node._imgW || !node._imgH) return;
+  const ar = parseRatio(arValue);
+  if (ar <= 0) return;
+  
+  let nw, nh;
+  if (node._imgW / node._imgH > ar) {
+    nh = node._imgH;
+    nw = Math.round(nh * ar);
+  } else {
+    nw = node._imgW;
+    nh = Math.round(nw / ar);
+  }
+  
+  const cx = (node._imgW - nw) / 2;
+  const cy = (node._imgH - nh) / 2;
+  
+  node._dragRect = { x: Math.max(0, Math.round(cx)), y: Math.max(0, Math.round(cy)), w: nw, h: nh };
+  node._isExpandMode = false;
+  syncWidgetsFromProps(node);
+  updateRatioPreset(node);
+}
+
+function loadImageFromUrl(url, callback) {
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.onload = () => {
+    callback(img.naturalWidth, img.naturalHeight);
+  };
+  img.onerror = () => {
+    callback(null, null);
+  };
+  img.src = url;
+}
+
+function findImageUrl(node) {
+  if (!node.inputs || !app || !app.graph) return null;
+  
+  for (const input of node.inputs) {
+    if (input.name === "image" && input.link !== null) {
+      const link = app.graph.links[input.link];
+      if (link) {
+        const originNode = app.graph.getNodeById(link.origin_id);
+        if (originNode) {
+          if (originNode.type === "LoadImage" || originNode.comfyClass === "LoadImage") {
+            const widget = originNode.widgets.find(w => w.name === "image");
+            if (widget && widget.value) {
+              const api = window.comfyAPI?.api;
+              if (api && api.apiURL) {
+                return api.apiURL("/view?filename=" + encodeURIComponent(widget.value) + "&type=output");
+              }
+            }
+          }
+          if (originNode.outputs && originNode.outputs[link.origin_slot]) {
+            const output = originNode.outputs[link.origin_slot];
+            if (output && output.shape) {
+              return "tensor:" + link.origin_id + ":" + link.origin_slot;
+            }
+          }
+        }
+      }
+    }
+  }
+  const fileWidget = node.widgets.find(w => w.name === "file");
+  if (fileWidget && fileWidget.value) {
+    const api = window.comfyAPI?.api;
+    if (api && api.apiURL) {
+      return api.apiURL("/view?filename=" + encodeURIComponent(fileWidget.value) + "&type=input");
+    }
+  }
+  return null;
+}
+
+function updateImageDimensions(node) {
+  const url = findImageUrl(node);
+  if (!url) return;
+  
+  if (url.startsWith("tensor:")) {
+    const parts = url.split(":");
+    const nodeId = parseInt(parts[1]);
+    const slot = parseInt(parts[2]);
+    if (app && app.graph) {
+      const originNode = app.graph.getNodeById(nodeId);
+      if (originNode && originNode.outputs && originNode.outputs[slot]) {
+        const output = originNode.outputs[slot];
+        if (output && output.shape) {
+          node._imgH = output.shape[1];
+          node._imgW = output.shape[2];
+          if (!node._dragRect) {
+            node._dragRect = { x: 0, y: 0, w: node._imgW, h: node._imgH };
+            syncWidgetsFromProps(node);
+          }
+          updateRatioPreset(node);
+          if (node.setDirtyCanvas) node.setDirtyCanvas();
+        }
+      }
+    }
+    return;
+  }
+  
+  loadImageFromUrl(url, (w, h) => {
+    if (w && h) {
+      node._imgW = w;
+      node._imgH = h;
+      if (!node._dragRect) {
+        node._dragRect = { x: 0, y: 0, w, h };
+        syncWidgetsFromProps(node);
+      }
+      updateRatioPreset(node);
+      if (node.setDirtyCanvas) node.setDirtyCanvas();
     }
   });
 }
 
 function onNodeCreated(node) {
+  console.log("[DeggCrop] onNodeCreated called, node:", node.id);
   if (node._deggCropInitialized) return;
   node._deggCropInitialized = true;
 
@@ -297,24 +510,38 @@ function onNodeCreated(node) {
     return false;
   };
 
+  addRatioPresetsWidget(node);
   addFullCenterMaxButtons(node);
   syncPropsFromWidgets(node);
+  
+  const x = node.widgets.find(w => w.name === "x")?.value || 0;
+  const y = node.widgets.find(w => w.name === "y")?.value || 0;
+  node._isExpandMode = x < 0 || y < 0;
+  
+  setTimeout(() => updateImageDimensions(node), 0);
 }
 
 function onConnectionsChange(node, _slot, _connected, _link, _io) {
-  if (node.widgets) {
-    const pw = node.widgets.find(w => w.name === "preview");
-    if (pw) {
-      const imgW = node.widgets.find(w => w.name === "width")?.value || node._imgW;
-      const imgH = node.widgets.find(w => w.name === "height")?.value || node._imgH;
-      if (imgW && imgH) {
-        node._imgW = imgW;
-        node._imgH = imgH;
-      }
-    }
-  }
+  setTimeout(() => updateImageDimensions(node), 100);
 }
 
+function onWidgetChanged(node, name, value, oldValue) {
+  if (!node._deggCropInitialized) return;
+  
+  if (name === "x" || name === "y" || name === "width" || name === "height") {
+    syncPropsFromWidgets(node);
+    node._isExpandMode = (node.widgets.find(w => w.name === "x")?.value || 0) < 0 || 
+                         (node.widgets.find(w => w.name === "y")?.value || 0) < 0;
+  } else if (name === "ratio_lock" || name === "aspect_ratio") {
+    syncPropsFromWidgets(node);
+  } else if (name === "file") {
+    setTimeout(() => updateImageDimensions(node), 100);
+  }
+  
+  if (node.setDirtyCanvas) node.setDirtyCanvas();
+}
+
+console.log("[DeggCrop] Extension loading, app:", !!app, "registerExtension:", !!(app && app.registerExtension));
 if (app && app.registerExtension) {
   app.registerExtension({
     name: EXT_NAME,
@@ -330,10 +557,46 @@ if (app && app.registerExtension) {
           if (originalOnConnectionsChange) originalOnConnectionsChange.call(this, node, slot, connected, link, io);
           onConnectionsChange(node, slot, connected, link, io);
         };
+        const originalOnInputsChanged = nodeType.prototype.onInputsChanged;
+        nodeType.prototype.onInputsChanged = function (node) {
+          console.log("[DeggCrop] onInputsChanged called, node:", node.id, "inputs:", node.inputs);
+          if (originalOnInputsChanged) originalOnInputsChanged.call(this, node);
+          // Check image input for tensor
+          if (node.inputs) {
+            for (const input of node.inputs) {
+              if (input.name === "image" && input.link !== null && app && app.graph) {
+                const link = app.graph.links[input.link];
+                if (link) {
+                  const originNode = app.graph.getNodeById(link.origin_id);
+                  if (originNode && originNode.outputs) {
+                    const output = originNode.outputs[link.origin_slot];
+                    if (output && output.shape) {
+                      node._imgH = output.shape[1];
+                      node._imgW = output.shape[2];
+                      if (!node._dragRect) {
+                        node._dragRect = { x: 0, y: 0, w: node._imgW, h: node._imgH };
+                        syncWidgetsFromProps(node);
+                      }
+                      updateRatioPreset(node);
+                      if (node.setDirtyCanvas) node.setDirtyCanvas();
+                    }
+                  }
+                }
+              }
+            }
+          }
+        };
+
+        const originalOnWidgetChanged = nodeType.prototype.onWidgetChanged;
+        nodeType.prototype.onWidgetChanged = function (node, name, value, oldValue) {
+          if (originalOnWidgetChanged) originalOnWidgetChanged.call(this, node, name, value, oldValue);
+          onWidgetChanged(node, name, value, oldValue);
+        };
+        
         const originalComputeSize = nodeType.prototype.computeSize;
         nodeType.prototype.computeSize = function (node) {
           if (originalComputeSize) return originalComputeSize.call(this, node);
-          return [node.size[0] || 300, PREVIEW_H + 40];
+          return [node.size[0] || 300, PREVIEW_H + 60];
         };
         const originalComputeLayoutSize = nodeType.prototype.computeLayoutSize;
         nodeType.prototype.computeLayoutSize = function (node, minW, minH, maxW, maxH) {
@@ -345,8 +608,6 @@ if (app && app.registerExtension) {
   });
 }
 
-// Export for tests
 if (!window.DeggCropPreview) {
-  window.DeggCropPreview = { PREVIEW_H, getHitArea, computePreviewHeight, computeLayoutSize };
+  window.DeggCropPreview = { PREVIEW_H, getHitArea, computePreviewHeight, computeLayoutSize, parseRatio, RATIO_PRESETS };
 }
-

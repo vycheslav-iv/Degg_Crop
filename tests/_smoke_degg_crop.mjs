@@ -107,7 +107,7 @@ function makeNode() {
   node.widgets = [
     w("file", ""), w("x", 0), w("y", 0),
     w("width", 512), w("height", 512), w("fill_color", "black"),
-    w("multiplicity", 8), w("resolution_mp", 0), w("upscale_method", "bicubic"),
+    w("multiplicity", 8), w("megapixels", 1.0), w("upscale_method", "bicubic"),
     w("aspect_ratio", "Custom"), w("ratio_lock", false), w("dim_percent", 40),
     w("image", null), w("mask", null),
   ];
@@ -149,7 +149,7 @@ check("нет старой кнопки Load Image", !byName(node, "Load Image")
 check("нет старого виджета Ratio Presets", !byName(node, "Ratio Presets"));
 
 // ── математика target_size (сравнение с python) ──────────────────────────
-// target_size(canvas_w, canvas_h, width, height, resolution_mp, multiplicity)
+// target_size(canvas_w, canvas_h, width, height, megapixels, multiplicity)
 // python: round(t/mult)*mult, min=mult
 function targetSizeJS(canvasW, canvasH, width, height, mp, mult) {
   mult = Math.max(1, Math.floor(mult));

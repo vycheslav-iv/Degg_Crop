@@ -1,12 +1,13 @@
-# SPECIFICATION.md — Degg_Crop (новая схема)
+# SPECIFICATION.md — Degg_Crop (новая схема, 2026-10-03)
 
 > Полная спецификация ноды: контракт Python, архитектура JS, все формулы,
 > правила синхронизации, тесты, ловушки. Читать вместе с `TASK.md`
 > (что делать) и `SESSION_MEMORY.md` (состояние).
 >
-> **Статус (2026-10-02): РЕАЛИЗОВАНО И ПРОВЕРЕНО.** §2–§11 описывают
-> реализацию как она есть; §12 — фактические результаты прогонов,
-> §13 — ловушки, §14 — приёмка.
+> **Статус (2026-10-03): РЕАЛИЗОВАНО, НО РАМКА НЕ ПОЯВЛЯЕТСЯ В UI.**
+> Все проверки проходят (ЗЕЛЁНОЕ: провалов 0), синхронизировано в ComfyUI.
+> **Критический баг:** JS загружается, но `onInputsChanged` не срабатывает / `_imgW`/`_imgH` не инициализируются.
+> Debug-логи добавлены в JS для диагностики.
 
 ---
 
@@ -21,7 +22,7 @@
   Окно **может выходить за границы** — всё, что за источником, заливается
   `fill_color` (Expand одной рамкой, без переключателя `operation`).
 - Ресайз **всегда включён** (как в ноде «Выбор разрешения» ResolutionSelector):
-  - `resolution_mp > 0` → цель = MP-площадь (MP·1024²) с пропорциями окна;
+  - `megapixels > 0` → цель = MP-площадь (MP·1024²) с пропорциями окна;
   - иначе → цель = `width×height` окна;
   - затем округление до `multiplicity`:
     `round(t/mult)*mult` (банковское округление Python `round()`, мин = `mult`).
@@ -36,19 +37,18 @@
 
 ## 2. Файлы проекта
 
-| Файл | Строк | Роль |
-|---|---|---|
-| `degg_crop.py` | ~350 | Нода: INPUT_TYPES (14), pipeline, 4 выхода. ГОТОВ |
-| `__init__.py` | 5 | Маппинги + `WEB_DIRECTORY = "web"` |
-| `web/js/degg_crop.js` | ~340 | Фронтенд: растягиваемый превью (`computeLayoutSize`), 9-зона hit-test, drag/resize, сетка третьих+золотое сечение, белый бейдж размера с тенью, кнопки Full/Center/Maximize, мост `node.onMouseMove`. ГОТОВ |
-| `tests/_test_degg_crop.py` | — | Python E2E (реальный torch, авто-перезапуск). `FAIL: 0` |
-| `tests/_smoke_degg_crop.mjs` | ~220 | JS-смоук в vm (ESM-совместимый). `SMOKE OK` |
-| `tests/_audit_degg_crop.mjs` | ~200 | Статический аудит (новая схема, Nodes 2.0). `аудит чист` |
-| `tests/_probe_live_dom.py` | — | Живой замер (headless Chrome + CDP) — по желанию |
-| `locales/ru+en/nodeDefs.json` | — | Переводы: 14 входов, 4 выхода |
-| `check.json` | 22 | 3 проверки + expect-строки. **НЕ МЕНЯТЬ** |
+| Файл | Роль |
+|---|---|
+| `degg_crop.py` | Python нода: INPUT_TYPES (14 входов), pipeline, 4 выхода |
+| `__init__.py` | Маппинги + `WEB_DIRECTORY = "web"` |
+| `web/js/degg_crop.js` | **С debug-логами** — Nodes 2.0 preview, 9-зона hit-test, drag/resize, Ratio Presets, Full/Center/Max кнопки, `onInputsChanged`/`onWidgetChanged` |
+| `tests/_test_degg_crop.py` | Python E2E (реальный torch, автоперезапуск) |
+| `tests/_smoke_degg_crop.mjs` | JS-смоук в vm (ESM-совместимый) |
+| `tests/_audit_degg_crop.mjs` | Статический аудит (новая схема, Nodes 2.0) |
+| `locales/ru+en/nodeDefs.json` | Переводы: 14 входов, 4 выхода |
+| `check.json` | 3 проверки + expect-строки. **НЕ МЕНЯТЬ** |
 
-## 3. Python-контракт
+## 3. Python-контракт (`degg_crop.py`)
 
 ### 3.1. INPUT_TYPES (14)
 
@@ -60,7 +60,7 @@
 | `width` | `INT` | required | 512, min=1, max=8192 |
 | `height` | `INT` | required | 512, min=1, max=8192 |
 | `multiplicity` | `INT` | optional | 8, min=8, max=128, step=4 |
-| `resolution_mp` | `FLOAT` | optional | 0.0, min=0, max=16, step=0.1 |
+| `megapixels` | `FLOAT` | optional | **1.0**, min=0, max=16, step=0.1 |
 | `upscale_method` | `UPSCALE_METHODS` | optional | "bicubic" |
 | `fill_color` | `FILL_COLORS` | optional | "black" |
 | `dim_percent` | `FLOAT` | optional | 40.0, min=0, max=100 |
@@ -69,238 +69,148 @@
 | `image` | `IMAGE` | optional | приоритет над файлом |
 | `mask` | `MASK` | optional | — |
 
-`FILL_COLORS = ["transparent", "black", "white", "gray", "red"]`
+`FILL_COLORS = ["transparent", "black", "white", "gray"]` (red удалён)
 `UPSCALE_METHODS = ["nearest-exact", "bilinear", "area", "bicubic", "lanczos"]`
 
 ### 3.2. Pipeline `process`
 
-1. **Источник**: если `image` передан (не `None`) → `src = image`;
-   иначе если `file` — непустая строка → `_load_image_file(file)` (folder_paths);
-   если `file` — `torch.Tensor` → используем как `src` (защита от позиционного
-   передачи тензора); иначе `ValueError`.
-2. **Композитинг** (`_compose`): холст `out_w × out_h` = `width × height`.
-   Источник вставляется со сдвигом `(-x, -y)`:
-   - `x>=0,y>=0` → кроп (часть источника в (0,0) холста);
-   - `x<0 или y<0` → Expand (поля заливки слева/сверху);
-   - окно может перекрывать источник частично — вставляется пересечение,
-     остальное — `fill_color`.
-3. **Ресайз** (`target_size` + `_interpolate`): всегда.
-   `target_size(canvas_w, canvas_h, width, height, resolution_mp, multiplicity)`
-   по правилу §1. Округление банковское `round()` (Python parity).
-   `lanczos` — через PIL (ленивый импорт внутри `_resize_lanczos`).
-4. **Маска** (`_fit_mask` + `_compose` + ресайз): тот же сдвим/холст,
-   fill = 0.0. Без маски/альфы → единицы `[B, target_h, target_w]`.
+1. **Источник**: `image` (провод, приоритет) → `file` (строка, загрузка через `folder_paths`) → тензор в `file` (позиционно) → плейсхолдер 64×64 (если ничего нет). `megapixels` применяется **только** если есть реальный источник.
+2. **Композитинг** (`_compose`): холст `out_w × out_h` = `width × height`. Источник вставляется со сдвигом `(-x, -y)`. Пересечение — исходник, остальное — `fill_color`.
+3. **Ресайз** (`target_size` + `_interpolate`): `megapixels` только при реальном источнике, иначе `width/height`. Банковское округление (`round()` к чётному). `lanczos` через PIL (ленивый импорт).
+4. **Маска** (`_fit_mask` + `_compose` + ресайз): тот же сдвим/холст, fill = 0.0. Без маски/альфы → единицы.
 
 Возврат: `(IMAGE, MASK, INT width, INT height)`.
 
 ### 3.3. Ленивые импорты
 
-`import numpy as np` / `from PIL import Image` — **внутри** `_resize_lanczos`
-(с отступом). Аудит банит только колонку 0.
+`numpy` / `PIL` — **внутри** `_resize_lanczos` (с отступом). Аудит банит только колонку 0.
 
-### 3.4. Банковское округление
-
-Python `round()` — к чётному. JS-обёртка `pyRound` обязана повторять один в один.
-
-## 4. JS-архитектура (`web/js/degg_crop.js`)
+## 4. JS-архитектура (`web/js/degg_crop.js`) — **С debug-логами**
 
 ### 4.1. ESM-совместимый загрузчик `app`
 
 ```js
+console.log("[DeggCrop] === SCRIPT START ===");
+console.log("[DeggCrop] window.comfyAPI:", !!window.comfyAPI);
+console.log("[DeggCrop] window.app:", !!window.app);
+
 let app;
 if (window.comfyAPI && window.comfyAPI.app && window.comfyAPI.app.app) {
   app = window.comfyAPI.app.app;
 } else if (window.app) {
   app = window.app;
-}
+} else { console.log("[DeggCrop] NO APP FOUND!"); }
+console.log("[DeggCrop] app:", !!app, "registerExtension:", !!(app && app.registerExtension));
 ```
 
-Работает и в браузере (ESM), и в vm-смоуке (без `import`).
-
-### 4.2. Константы
-
-- `PREVIEW_H = 160` — фиксированная высота области превью.
-- `PREVIEW_PAD = 8` — отступы.
-- `GOLDEN_RATIO = 1.61803398875`.
-
-### 4.3. Экспорт для тестов
+### 4.2. Регистрация расширения
 
 ```js
-if (!window.DeggCropPreview) {
-  window.DeggCropPreview = { PREVIEW_H, getHitArea, computePreviewHeight, computeLayoutSize };
+if (app && app.registerExtension) {
+  app.registerExtension({
+    name: EXT_NAME,
+    beforeRegisterNodeDef: (nodeType, nodeData) => {
+      if (nodeData.name === "DeggCrop") {
+        // patch onNodeCreated, onConnectionsChange, onInputsChanged, onWidgetChanged
+        // computeSize, computeLayoutSize
+      }
+    }
+  });
 }
 ```
 
-### 4.4. beforeRegisterNodeDef
+### 4.3. Ключевые обработчики (пропатчены в прототипе)
 
-Перехватывает `DeggCrop` и патчит прототип:
-- `onNodeCreated` → `onNodeCreated(node)` (идемпотентно)
-- `onConnectionsChange` → `onConnectionsChange(...)`
-- `computeSize` → fallback `[node.size[0]||300, PREVIEW_H+40]`
-- `computeLayoutSize` → `computeLayoutSize(node, minW, minH, maxW, maxH)`
+| Хук | Что делает | Debug-лог |
+|---|---|---|
+| `onNodeCreated` | Создаёт виджет `preview` (type=custom, serialize=false, computeLayoutSize/draw/mouse), вставляет первым. Добавляет `ratio_preset` combo + кнопки `fit_full/fit_center/fit_max`. Вызывает `updateImageDimensions()`. | `[DeggCrop] onNodeCreated called, node: <id>` |
+| `onInputsChanged` | **Критично** — читает подключённый вход `image`, извлекает `output.shape[1]/[2]` (H/W), инициализирует `_imgW`/`_imgH`, `_dragRect`, синхронизирует виджеты, обновляет ratio preset, `setDirtyCanvas()`. | `[DeggCrop] onInputsChanged called, node: <id>, inputs: [...]` |
+| `onWidgetChanged` | Обрабатывает x/y/width/height → `syncPropsFromWidgets`, пересчёт `_isExpandMode`. ratio_lock/aspect_ratio → sync. file → перезагрузка dimensions. | (нет) |
+| `onConnectionsChange` | Таймаут 100мс → `updateImageDimensions()` | (нет) |
 
-### 4.5. onNodeCreated
+### 4.4. Виджет preview
 
-1. Создаёт виджет `preview` (type="custom", serialize=false) с:
-   - `computeSize` → `[node.size[0]||300, PREVIEW_H]`
-   - `computeLayoutSize` → stretch-ready
-   - `draw` → сетка третьих + золотое сечение + рамка + бейдж
-   - `mouse` → 9-зона hit-test + drag/resize + ratio lock
-2. Вставляет `preview` первым в `node.widgets`.
-3. Добавляет кнопки `fit_full` (Full image), `fit_center` (Center), `fit_max` (Maximize).
-4. `node.onMouseMove` → мост к `widget.options.mouse`.
-5. `syncPropsFromWidgets(node)` — инициализирует `_dragRect`, `_ratioLock`, `_aspect`.
+- **type=custom**, serialize=false, `computeLayoutSize` (stretch для Nodes 2.0)
+- **draw**: сетка третьих + золотое сечение + белая рамка 2px + полупрозрачный fill + бейдж «W×H»
+- **mouse**: 9-зона hit-test (nw/ne/sw/se/n/s/e/w/move, порог 8px), drag/resize с ratio lock, clamp к границам изображения в Crop режиме
 
-### 4.6. Виджет preview — рисование (`draw`)
+### 4.5. Ratio Presets
 
-- Фон `#222`, если нет картинки.
-- Сетка: 2 вертикальные + 2 горизонтальные линии третьих (пунктир белая 0.4)
-  + золотое сечение (золотой 0.6).
-- Рамка: белая обводка 2px + полупрозрачный чёрный fill.
-- Бейдж: белый текст «W×H» с тонкой тенью (подложка `fillRect` по `text.length`,
-  `measureText` **не используется** — для совместимости со смоук-заглушкой).
+Combo `ratio_preset` (вставлен после `aspect_ratio`):
+- Custom, Free (Source), 1:1, 4:3, 3:4, 16:9, 9:16, 2:3, 3:2, 21:9
+- Callback → обновляет `aspect_ratio` + `ratio_lock` → `applyAspectRatio()` → пересчитывает width/height из `_imgW`/`_imgH` → `syncWidgetsFromProps`
 
-### 4.7. Мышь (`mouse` в options)
+### 4.6. Загрузка изображения (`updateImageDimensions`)
 
-- `mousedown` → `getHitArea` (9 зон: nw/ne/sw/se/n/s/e/w/move, порог 8px) →
-  запоминает `dragMode`, `dragStart`, `dragRectStart`.
-- `mousemove` при `dragMode` → пересчёт rect с учётом `scale`, `ratioLock`,
-  `aspect`; `syncWidgetsFromProps` (писает в виджеты x,y,width,height).
-- `mouseup` → сброс drag.
+Источники (в порядке приоритета):
+1. Подключённый вход `image` → `tensor:` URL → читает `output.shape` из upstream
+2. LoadImage нода → `/view?filename=...&type=output` → Image.onload → натуральные W/H
+3. File widget → `/view?filename=...&type=input` → Image.onload
 
-### 4.8. Кнопки
+### 4.7. Константы
 
-- `fit_full` → окно = весь источник (0,0,srcW,srcH).
-- `fit_center` → центрирует текущее окно в источнике.
-- `fit_max` → максимизирует окно с сохранением пропорций в пределах источника.
+- `PREVIEW_H = 160`, `PREVIEW_PAD = 8`, `GOLDEN_RATIO = 1.618...`
 
-### 4.9. onConnectionsChange
+## 5. Locales (ru/en)
 
-При подключении/отключении `image` — пробует прочитать `width`/`height`
-из виджетов как исходные размеры картинки (`_imgW`, `_imgH`).
+14 входов: `file, x, y, width, height, multiplicity, megapixels, upscale_method, fill_color, dim_percent, aspect_ratio, ratio_lock, image, mask`
+4 выхода: `0:image, 1:mask, 2:width, 3:height`
 
-## 5. Математика (Python parity)
+## 6. Тесты (все проходят)
 
-```js
-function pyRound(v) {
-  const f = Math.floor(v);
-  const d = v - f;
-  if (d > 0.5) return f + 1;
-  if (d < 0.5) return f;
-  return (f % 2 === 0) ? f : f + 1; // banker's
-}
-function roundMult(v, m) { return Math.max(m, pyRound(v / m) * m); }
+| Тест | Команда | Ожидаемый вывод |
+|---|---|---|
+| Python | `python tests/_test_degg_crop.py` | `ИТОГО: ок=14 FAIL=0` + `ТЕСТ ПРОЙДЕН` |
+| JS Smoke | `node tests/_smoke_degg_crop.mjs` | `SMOKE OK`, `FAIL=0` |
+| Audit | `node tests/_audit_degg_crop.mjs` | `аудит чист`, `FAIL=0` |
+| check.py | `python _process/check.py Degg_Crop` | `ЗЕЛЁНОЕ: провалов 0` |
 
-function targetSizeJS(canvasW, canvasH, width, height, mp, mult) {
-  mult = Math.max(1, Math.floor(mult));
-  const mpF = parseFloat(mp) || 0;
-  let tw, th;
-  if (mpF > 0 && canvasW > 0 && canvasH > 0) {
-    const area = mpF * 1024 * 1024;
-    const ratio = canvasW / canvasH;
-    tw = Math.sqrt(area * ratio);
-    th = Math.sqrt(area / ratio);
-  } else {
-    tw = width; th = height;
-  }
-  return [roundMult(tw, mult), roundMult(th, mult)];
-}
+## 7. Известные проблемы (КРИТИЧНО)
+
+### 7.1. Рамка не появляется в UI
+**Симптомы:** Нода создаётся, но `_imgW`/`_imgH` остаются `undefined`, превью показывает "No image", рамки нет.
+**Debug-логи добавлены** — после перезапуска ComfyUI в F12 Console должны появиться:
 ```
-
-## 6. Locales
-
-14 входов (ru/en): `file, x, y, width, height, multiplicity, resolution_mp,
-upscale_method, fill_color, dim_percent, aspect_ratio, ratio_lock, image, mask`.
-4 выхода: `0:image, 1:mask, 2:width, 3:height`.
-
-## 7. Тесты
-
-### 7.1. Python (`tests/_test_degg_crop.py`)
-
-Автоперезапуск под `D:\ComfyUI_windows_portable\python_embeded\python.exe`
-(есть torch). Проверяет: Crop внутри, Expand, fill-цвета, батч, RGBA, ошибки.
-`multiplicity=1` в геометрических тестах для точных размеров окна.
-Вывод: `ИТОГО: ок=14 FAIL: 0` + `ТЕСТ ПРОЙДЕН`.
-
-### 7.2. JS-смоук (`tests/_smoke_degg_crop.mjs`)
-
-vm-контекст: `Image` (640×480), `window.comfyAPI.app`, `app.registerExtension`.
-Проверяет: расширение захвачено, `window.DeggCropPreview` экспортирован,
-перехваты хуков, виджет preview (type=custom, serialize=false,
-computeLayoutSize/draw/mouse), кнопки fit_*, нет старых Ratio Presets/Load Image,
-targetSizeJS математика, getHitArea 9 зон, draw() без ошибок.
-Вывод: `SMOKE OK`, `FAIL=0`.
-
-### 7.3. Статический аудит (`tests/_audit_degg_crop.mjs`)
-
-Проверяет: Python INPUT_TYPES (14, без operation/crop_*/image_in),
-`image_upload: true`, ленивые импорты numpy/PIL, JS: `computeLayoutSize`,
-`beforeRegisterNodeDef`, `node.onMouseMove`, экспорт `window.DeggCropPreview`,
-нет `onWidgetChanged`/`onExecuted`/`onConfigure`, нет `this.computeSize=`,
-нет `setInterval`/`MutationObserver`, locales 14 входов, check.json 3 проверки.
-Вывод: `аудит чист`, `FAIL=0`.
-
-### 7.4. Живой замер (`tests/_probe_live_dom.py`)
-
-Headless Chrome + CDP: 43 проверки (рендер, computeSize, hit-test, drag,
-пресеты, кнопки, бейдж, reopen). Запускается отдельно при запущенном ComfyUI.
-
-## 8. Правила проверки (check.json — не менять)
-
-```json
-{
-  "checks": [
-    {"label": "логика ноды (Python, реальный torch)",
-     "cmd": "python tests/_test_degg_crop.py",
-     "expect": ["FAIL: 0", "ТЕСТ ПРОЙДЕН"]},
-    {"label": "JS-смоук (заглушки window/LiteGraph)",
-     "cmd": "node tests/_smoke_degg_crop.mjs",
-     "expect": ["SMOKE OK"]},
-    {"label": "статический аудит",
-     "cmd": "node tests/_audit_degg_crop.mjs",
-     "expect": ["аудит чист"]}
-  ]
-}
+[DeggCrop] === SCRIPT START ===
+[DeggCrop] window.comfyAPI: true
+[DeggCrop] Got app from comfyAPI.app.app
+[DeggCrop] Extension loading, app: true registerExtension: true
+[DeggCrop] onNodeCreated called, node: <id>
+[DeggCrop] onInputsChanged called, node: <id>, inputs: [...]
 ```
+**Если логов 1-3 нет** — скрипт не загружается (кэш/путь).
+**Если 4 нет** — `app.registerExtension` недоступен.
+**Если 5 нет** — `beforeRegisterNodeDef` не сработал (имя ноды не "DeggCrop").
+**Если 6 нет** — `onInputsChanged` не вызывается ComfyUI для этого типа входа.
 
-Команда: `python _process/check.py Degg_Crop` → `ЗЕЛЁНОЕ: провалов 0`.
+### 7.2. OreX Crop работает — разница в механике
+OreX использует `onNodeCreated` + ручная подписка на события графа. Degg_Crop полагается на `onInputsChanged` — возможно, ComfyUI не вызывает его для `IMAGE` входа.
 
-## 9. Синхронизация
+**Следующий шаг для новой модели:** сравнить с OreX_Crop.js (как там получают изображение) и либо:
+- Добавить `setInterval` поллинг `node.inputs[0]?.link` в `onNodeCreated`
+- Использовать `app.graph.on("graphchange", ...)` как в OreX
+- Проверить, вызывает ли ComfyUI `onInputsChanged` для `IMAGE` сокетов
 
-`python sync.py Degg_Crop` — копирует 6 файлов в
-`D:\ComfyUI_windows_portable\ComfyUI\custom_nodes\Degg_Crop`,
-чистит `__pycache__`. Перезапуск ComfyUI обязателен.
-
-## 10. Ловушки
-
-1. **Tensor в `file`** — позиционная передача тензора в `file` (вместо `image`)
-   ломает `folder_paths.get_annotated_filepath` (`AttributeError: 'Tensor' object has no attribute 'endswith'`). Защита: в `process` и `VALIDATE_INPUTS`/`IS_CHANGED` проверять `torch.is_tensor(file)` и пропускать файловые проверки.
-2. **Банковское округление** — JS `pyRound` обязан совпадать с Python `round()`
-   (к чётному). Иначе бейдж и выход разъедутся на ±`multiplicity`.
-3. **Ленивые импорты numpy/PIL** — только внутри `_resize_lanczos` (с отступом).
-   Аудит банит колонку 0 (`/^import numpy/m`, `/^from PIL/m`).
-4. **previewArea / hit-test** — `getHitArea` работает в координатах виджета
-   (передаём `mx - rx, my - ry`). Не путать с координатами ноды/канваса.
-5. **`computeLayoutSize` vs `computeSize`** — Nodes 2.0 использует
-   `computeLayoutSize` для stretch. `computeSize` — fallback. Не перезаписывать
-   `this.computeSize` на ноде (аудит).
-6. **`serialize: false`** — и на виджете, и в `options` (двойная страховка).
-7. **`node.onMouseMove` мост** — виджет получает события только на mousedown;
-   hover/drag/resize нужно через `node.onMouseMove`.
-8. **check.json не менять** — строки `expect` обязаны появиться в выводе.
-9. **Тесты в `tests/`** — `sync.py` их не копирует. Legacy в корне — тоже.
-10. **Живой замер** — в `check.py` не входит, сервер после него выключать.
-
-## 11. Приёмка
+## 8. Команды
 
 ```bash
-python _process/check.py Degg_Crop
-# → ЗЕЛЁНОЕ: провалов 0
+# Проверка
+python _process/check.py Degg_Crop        # ЗЕЛЁНОЕ
+python tests/_test_degg_crop.py           # ТЕСТ ПРОЙДЕН
+node tests/_smoke_degg_crop.mjs           # SMOKE OK
+node tests/_audit_degg_crop.mjs           # АУДИТ ЧИСТ
 
-python sync.py Degg_Crop
-# → 6 файлов синхронизировано, перезапуск ComfyUI
+# Синхронизация
+python sync.py Degg_Crop                  # 6 файлов в ComfyUI
+# Перезапуск ComfyUI ОБЯЗАТЕЛЬНЫЙ
 ```
 
-Ручная проверка в браузере (Nodes 2.0): загрузка изображения, drag/resize рамки
-9 зон, Full/Center/Maximize, Expand за границы (fill_color), MP+кратность,
-маска/альфа, reopen workflow без потери виджетов.
+## 9. Файлы для передачи новой модели
+
+- `degg_crop.py` — Python (рабочий, тесты зелёные)
+- `web/js/degg_crop.js` — JS с debug-логами (требует фикса рамки)
+- `locales/ru/nodeDefs.json`, `locales/en/nodeDefs.json` — переводы
+- `tests/_test_degg_crop.py`, `_smoke_degg_crop.mjs`, `_audit_degg_crop.mjs` — тесты
+- `check.json` — не менять
+- `SPECIFICATION.md` — этот файл
+- `SESSION_MEMORY.md` — состояние сессии

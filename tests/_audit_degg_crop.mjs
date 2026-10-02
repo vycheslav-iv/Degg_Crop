@@ -56,7 +56,7 @@ if (PY) {
   // имена входов из INPUT_TYPES (только тело метода, не весь файл)
   const block = (PY.match(/def INPUT_TYPES[\s\S]*?RETURN_TYPES/) || [])[0] || PY;
   const inputNames = [...block.matchAll(/"(\w+)"\s*:\s*\(/g)].map((m) => m[1]);
-  const expected = ["file", "x", "y", "width", "height", "multiplicity", "resolution_mp", "upscale_method", "fill_color", "dim_percent", "aspect_ratio", "ratio_lock", "image", "mask"];
+  const expected = ["file", "x", "y", "width", "height", "multiplicity", "megapixels", "upscale_method", "fill_color", "dim_percent", "aspect_ratio", "ratio_lock", "image", "mask"];
   check("python: входы INPUT_TYPES — 14 нужных (image/mask опциональны)", expected.every((e) => inputNames.includes(e)), JSON.stringify(inputNames));
   check("python: нет старых operation/crop_*/image_in", !inputNames.includes("operation") && !inputNames.some(n => n.startsWith("crop_")) && !inputNames.includes("image_in"));
   check("python: aspect_ratio/ratio_lock в optional (не применяются в process)", /"aspect_ratio":\s*\("STRING"/.test(PY) && /"ratio_lock":\s*\("BOOLEAN"/.test(PY));
@@ -116,7 +116,7 @@ if (JS) {
   has(JS, /nodeType\.prototype\.computeLayoutSize/, "js: перехват computeLayoutSize (Nodes 2.0)");
 
   // НЕ должно быть старых хуков
-  check("js: нет onWidgetChanged", !/onWidgetChanged/.test(JS));
+  has(JS, /onWidgetChanged/, "js: onWidgetChanged для синка виджетов");
   check("js: нет onExecuted", !/onExecuted/.test(JS));
   check("js: нет onConfigure", !/onConfigure/.test(JS));
   check("js: нет перезаписи this.computeSize на ноде", !/this\.computeSize\s*=/.test(JS));
@@ -141,7 +141,7 @@ if (JS && locales.ru && locales.en) {
     check(`locales/${lang}: узел DeggCrop описан`, !!node);
     if (!node) continue;
     const keys = Object.keys(node.inputs || {});
-    const expected = ["file", "x", "y", "width", "height", "multiplicity", "resolution_mp", "upscale_method", "fill_color", "dim_percent", "aspect_ratio", "ratio_lock", "image", "mask"];
+    const expected = ["file", "x", "y", "width", "height", "multiplicity", "megapixels", "upscale_method", "fill_color", "dim_percent", "aspect_ratio", "ratio_lock", "image", "mask"];
     check(`locales/${lang}: входы совпадают с INPUT_TYPES (14)`, expected.every((e) => keys.includes(e)), JSON.stringify(keys));
     const outs = node.outputs || {};
     check(`locales/${lang}: есть все 4 выхода (0–3)`, ["0", "1", "2", "3"].every((k) => outs[k] && outs[k].name), JSON.stringify(Object.keys(outs)));

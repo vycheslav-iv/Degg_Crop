@@ -7,7 +7,7 @@
       "width": { "name": "width" },
       "height": { "name": "height" },
       "multiplicity": { "name": "multiplicity" },
-      "resolution_mp": { "name": "resolution (MP)" },
+      "megapixels": { "name": "megapixels" },
       "upscale_method": { "name": "upscale method" },
       "fill_color": { "name": "fill color" },
       "dim_percent": { "name": "dim percent" },

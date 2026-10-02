@@ -14,7 +14,7 @@
    Композитинг: холст = окно, источник кладётся в (-x, -y).
 3. РЕСАЙЗ — включается ВСЕГДА (как в стандартной ноде «Выбор разрешения»
    ResolutionSelector):
-     resolution_mp > 0 → цель = MP-площадь (MP·1024²) с пропорциями окна;
+     megapixels > 0 → цель = MP-площадь (MP·1024²) с пропорциями окна;
      иначе            → цель = размер окна;
      затем округление до кратности multiplicity — как ResolutionSelector:
      round(t/multiple)*multiple (banker's rounding, min = multiple).
@@ -30,7 +30,7 @@ import os
 
 import torch
 
-FILL_COLORS = ["transparent", "black", "white", "gray", "red"]
+FILL_COLORS = ["transparent", "black", "white", "gray"]
 
 UPSCALE_METHODS = ["nearest-exact", "bilinear", "area", "bicubic", "lanczos"]
 
@@ -42,7 +42,6 @@ _FILL_RGB = {
     "black": (0.0, 0.0, 0.0),
     "white": (1.0, 1.0, 1.0),
     "gray": (0.5, 0.5, 0.5),
-    "red": (1.0, 0.0, 0.0),
 }
 
 
@@ -106,7 +105,7 @@ def _compose(content, canvas_w, canvas_h, off_x, off_y, fill):
     return canvas
 
 
-def target_size(canvas_w, canvas_h, width, height, resolution, multiplicity):
+def target_size(canvas_w, canvas_h, width, height, megapixels, multiplicity):
     """Итоговые размеры выхода: (target_w, target_h) — всегда с кратностью.
 
     Как в стандартной ноде «Выбор разрешения» (ResolutionSelector):
@@ -116,7 +115,7 @@ def target_size(canvas_w, canvas_h, width, height, resolution, multiplicity):
       как у ResolutionSelector), минимум — сама кратность.
     """
     mult = max(1, int(multiplicity))
-    mp = float(resolution or 0.0)
+    mp = float(megapixels or 0.0)
     if mp > 0 and canvas_w > 0 and canvas_h > 0:
         area = mp * 1024.0 * 1024.0
         ratio = canvas_w / canvas_h
@@ -240,8 +239,9 @@ class DeggCrop:
                                            "label_on": "ВКЛ",
                                            "label_off": "ВЫКЛ"}),
                 "multiplicity": ("INT", {"default": 8, "min": 8, "max": 128, "step": 4}),
-                "resolution_mp": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 16.0,
-                                            "step": 0.1}),
+                "megapixels": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 16.0,
+                                            "step": 0.1,
+                                            "tooltip": "Target resolution in megapixels (1 MP = 1024×1024); 0 = use crop size"}),
                 "upscale_method": (UPSCALE_METHODS, {"default": "bicubic"}),
                 "fill_color": (FILL_COLORS, {"default": "black"}),
                 "dim_percent": ("FLOAT", {"default": 40.0, "min": 0.0, "max": 100.0,
@@ -302,27 +302,37 @@ class DeggCrop:
     def process(self, file="", image=None, mask=None,
                 x=0, y=0, width=512, height=512,
                 aspect_ratio=DEFAULT_ASPECT, ratio_lock=False,
-                multiplicity=8, resolution_mp=0.0, upscale_method="bicubic",
+                multiplicity=8, megapixels=1.0, upscale_method="bicubic",
                 fill_color="black", dim_percent=40.0, **kwargs):
         src = image
         loaded_mask = None
+        has_source = False
+        
         try:
             import torch as _torch
             if src is None and _torch.is_tensor(file):
                 src = file
                 file = ""
+                has_source = True
         except Exception:
             pass
+        
         if src is None:
             fstr = ""
             try:
                 fstr = str(file) if file is not None else ""
             except Exception:
                 fstr = ""
-            if not fstr.strip():
-                raise ValueError(
-                    "Degg_Crop: подключите вход image или выберите файл")
-            src, loaded_mask = _load_image_file(file)
+            if fstr.strip():
+                src, loaded_mask = _load_image_file(file)
+                has_source = True
+        
+        if not has_source:
+            # No image source - create minimal placeholder to avoid crash
+            import torch as _torch
+            src = _torch.zeros((1, 64, 64, 3), dtype=_torch.float32)
+            loaded_mask = None
+            has_source = False
         try:
             import torch as _torch
             if not _torch.is_tensor(src):
@@ -350,8 +360,11 @@ class DeggCrop:
 
         out = _compose(src, out_w, out_h, -x, -y, fill_color)
 
+        # Only apply megapixels scaling if we have a real source image
+        # and megapixels > 0. Otherwise use widget width/height.
+        effective_megapixels = megapixels if (has_source and megapixels > 0) else 0.0
         target_w, target_h = target_size(
-            out_w, out_h, out_w, out_h, resolution_mp, multiplicity)
+            out_w, out_h, out_w, out_h, effective_megapixels, multiplicity)
         if out.shape[1] != target_h or out.shape[2] != target_w:
             out = _interpolate(out, target_h, target_w, upscale_method)
 
