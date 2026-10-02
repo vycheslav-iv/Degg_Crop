@@ -1,0 +1,30 @@
+{
+  "DeggCrop": {
+    "inputs": {
+      "image": { "name": "изображение" },
+      "operation": { "name": "операция" },
+      "x": { "name": "X" },
+      "y": { "name": "Y" },
+      "width": { "name": "ширина" },
+      "height": { "name": "высота" },
+      "fill_color": { "name": "заливка" },
+      "image_in": { "name": "изображение (вход)" },
+      "crop_left": { "name": "обрезка слева, %" },
+      "crop_right": { "name": "обрезка справа, %" },
+      "crop_top": { "name": "обрезка сверху, %" },
+      "crop_bottom": { "name": "обрезка снизу, %" },
+      "multiplicity": { "name": "кратность" },
+      "resolution_mp": { "name": "разрешение (MP)" },
+      "upscale_method": { "name": "метод апскейла" },
+      "aspect_ratio": { "name": "пропорции" },
+      "ratio_lock": { "name": "блокировка пропорций" },
+      "mask": { "name": "маска" }
+    },
+    "outputs": {
+      "0": { "name": "изображение" },
+      "1": { "name": "маска" },
+      "2": { "name": "ширина" },
+      "3": { "name": "высота" }
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "checks": [
+    {
+      "label": "логика ноды (Python, реальный torch)",
+      "cmd": "python tests/_test_degg_crop.py",
+      "expect": ["FAIL: 0", "ТЕСТ ПРОЙДЕН"],
+      "description": "геометрия Crop/Expand на всех 9 положениях, заливка, число каналов, batch, деградация, INPUT_TYPES"
+    },
+    {
+      "label": "JS-смоук (заглушки window/LiteGraph)",
+      "cmd": "node tests/_smoke_degg_crop.mjs",
+      "expect": ["SMOKE OK"],
+      "description": "регистрация расширения, виджет-превью, раскладка fit-to-target в обоих режимах, триггеры перерисовки"
+    },
+    {
+      "label": "статический аудит",
+      "cmd": "node tests/_audit_degg_crop.mjs",
+      "expect": ["аудит чист"],
+      "description": "согласованность Python/JS/locales, запрещённые приёмы (timers, перезапись computeSize, scripts/app.js)"
+    }
+  ]
+}
