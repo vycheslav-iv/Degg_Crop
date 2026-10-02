@@ -1,23 +1,19 @@
 {
   "DeggCrop": {
     "inputs": {
-      "image": { "name": "изображение" },
-      "operation": { "name": "операция" },
+      "file": { "name": "файл" },
       "x": { "name": "X" },
       "y": { "name": "Y" },
       "width": { "name": "ширина" },
       "height": { "name": "высота" },
-      "fill_color": { "name": "заливка" },
-      "image_in": { "name": "изображение (вход)" },
-      "crop_left": { "name": "обрезка слева, %" },
-      "crop_right": { "name": "обрезка справа, %" },
-      "crop_top": { "name": "обрезка сверху, %" },
-      "crop_bottom": { "name": "обрезка снизу, %" },
       "multiplicity": { "name": "кратность" },
       "resolution_mp": { "name": "разрешение (MP)" },
       "upscale_method": { "name": "метод апскейла" },
+      "fill_color": { "name": "заливка" },
+      "dim_percent": { "name": "затемнение, %" },
       "aspect_ratio": { "name": "пропорции" },
       "ratio_lock": { "name": "блокировка пропорций" },
+      "image": { "name": "изображение (провод)" },
       "mask": { "name": "маска" }
     },
     "outputs": {

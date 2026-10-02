@@ -1,23 +1,19 @@
 {
   "DeggCrop": {
     "inputs": {
-      "image": { "name": "image" },
-      "operation": { "name": "operation" },
+      "file": { "name": "file" },
       "x": { "name": "x" },
       "y": { "name": "y" },
       "width": { "name": "width" },
       "height": { "name": "height" },
-      "fill_color": { "name": "fill color" },
-      "image_in": { "name": "image (input)" },
-      "crop_left": { "name": "crop left, %" },
-      "crop_right": { "name": "crop right, %" },
-      "crop_top": { "name": "crop top, %" },
-      "crop_bottom": { "name": "crop bottom, %" },
       "multiplicity": { "name": "multiplicity" },
       "resolution_mp": { "name": "resolution (MP)" },
       "upscale_method": { "name": "upscale method" },
+      "fill_color": { "name": "fill color" },
+      "dim_percent": { "name": "dim percent" },
       "aspect_ratio": { "name": "aspect ratio" },
       "ratio_lock": { "name": "ratio lock" },
+      "image": { "name": "image (wire)" },
       "mask": { "name": "mask" }
     },
     "outputs": {
