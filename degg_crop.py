@@ -305,12 +305,12 @@ class DeggCrop:
                 multiplicity=8, megapixels=1.0, upscale_method="bicubic",
                 fill_color="black", dim_percent=40.0, **kwargs):
         src = image
-        loaded_mask = None
+        loaded_mask = mask
         has_source = False
         
         try:
             import torch as _torch
-            if src is None and _torch.is_tensor(file):
+            if _torch.is_tensor(file):
                 src = file
                 file = ""
                 has_source = True
@@ -326,13 +326,12 @@ class DeggCrop:
             if fstr.strip():
                 src, loaded_mask = _load_image_file(file)
                 has_source = True
-        
-        if not has_source:
-            # No image source - create minimal placeholder to avoid crash
-            import torch as _torch
-            src = _torch.zeros((1, 64, 64, 3), dtype=_torch.float32)
-            loaded_mask = None
-            has_source = False
+            else:
+                # No file specified - create minimal placeholder
+                import torch as _torch
+                src = _torch.zeros((1, 64, 64, 3), dtype=_torch.float32)
+                loaded_mask = None
+                has_source = False
         try:
             import torch as _torch
             if not _torch.is_tensor(src):
@@ -368,7 +367,7 @@ class DeggCrop:
         if out.shape[1] != target_h or out.shape[2] != target_w:
             out = _interpolate(out, target_h, target_w, upscale_method)
 
-        base = mask if mask is not None else loaded_mask
+        base = loaded_mask
         if base is not None:
             m = _fit_mask(base, img_h, img_w)
             m_canvas = _compose(m, out_w, out_h, -x, -y, (0.0,))
