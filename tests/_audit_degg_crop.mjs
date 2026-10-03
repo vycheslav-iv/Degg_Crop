@@ -84,23 +84,39 @@ if (JS) {
   has(JS, /function syncWidgetsFromProps/, "js: syncWidgetsFromProps");
   has(JS, /function drawPreview/, "js: drawPreview");
   has(JS, /function drawGridThirds/, "js: drawGridThirds (сетка третьих + золотое сечение)");
+  has(JS, /function applyDrag/, "js: applyDrag (перемещение/ресайз рамки)");
+  check("js: drag рамки БЕЗ клампа к изображению (аутпеинт)",
+    !/Math\.min\(node\._imgW\s*-\s*nw/.test(JS) && !/nx\s*=\s*Math\.max\(0,\s*Math\.min/.test(JS));
   has(JS, /function computeLayoutSize/, "js: computeLayoutSize (Nodes 2.0 stretch)");
   has(JS, /function makePreviewWidget/, "js: makePreviewWidget (custom widget)");
+  has(JS, /function computeLayout/, "js: computeLayout (объединение изображения и окна)");
+  has(JS, /function pythonTarget/, "js: pythonTarget (размер выхода как в python)");
+  has(JS, /function pyRound/, "js: pyRound (банковское округление)");
+  has(JS, /function roundMult/, "js: roundMult (кратность)");
   has(JS, /function addFullCenterMaxButtons/, "js: addFullCenterMaxButtons (Full/Center/Maximize)");
   has(JS, /function onNodeCreated/, "js: onNodeCreated");
   has(JS, /function onConnectionsChange/, "js: onConnectionsChange");
+  has(JS, /function onWidgetChanged/, "js: onWidgetChanged");
+  has(JS, /function onPreviewMouse/, "js: onPreviewMouse (обработчик мыши)");
   has(JS, /node\.onMouseMove\s*=/, "js: node.onMouseMove мост к widget.mouse");
   has(JS, /type:\s*"custom"/, "js: preview widget type=custom");
   has(JS, /serialize:\s*false/, "js: preview widget serialize=false");
-  has(JS, /computeLayoutSize:/, "js: preview widget options.computeLayoutSize");
-  has(JS, /computeSize:/, "js: preview widget options.computeSize (fallback)");
-  has(JS, /draw:/, "js: preview widget options.draw");
-  has(JS, /mouse:/, "js: preview widget options.mouse (drag/resize)");
+  // Контракт фронтенда: draw/mouse/computeSize на ВЕРХНЕМ уровне виджета.
+  has(JS, /computeSize\(width\)\s*\{/, "js: preview widget top-level computeSize");
+  has(JS, /draw\(ctx,\s*widgetNode,\s*width,\s*y\)/, "js: preview widget top-level draw(ctx,node,width,y)");
+  has(JS, /mouse\(e,\s*pos,\s*widgetNode\)/, "js: preview widget top-level mouse(e,pos,node)");
+  check("js: draw/mouse/computeSize НЕ спрятаны в options (фронтенд их не читает)",
+    !/options:\s*\{[\s\S]{0,400}?(draw|mouse|computeSize)\s*:/.test(JS));
+  has(JS, /canvasOnly:\s*true/, "js: canvasOnly:true (скрыт в панели свойств)");
+  has(JS, /comfyAPI\.api\.api/, "js: api берётся из comfyAPI.api.api (не namespace)");
   has(JS, /fit_full/, "js: кнопка fit_full (Full image)");
   has(JS, /fit_center/, "js: кнопка fit_center (Center)");
   has(JS, /fit_max/, "js: кнопка fit_max (Maximize)");
-  check("js: нет старой кнопки Load Image", !/Load Image/.test(JS));
-  check("js: нет старого виджета Ratio Presets", !/Ratio Presets/.test(JS));
+  check("js: нет onInputsChanged (хука нет во фронтенде)", !/onInputsChanged/.test(JS));
+  check("js: нет setInterval/MutationObserver (самолечение через draw)", !/setInterval/.test(JS) && !/MutationObserver/.test(JS));
+  check("js: нет старого имени виджета preview", !/name:\s*"preview"/.test(JS));
+  has(JS, /name:\s*"ratio_preset"/, "js: комбо ratio_preset");
+  check("js: нет виджета с именем 'Ratio Presets'", !/name:\s*"Ratio Presets"/.test(JS));
   has(JS, /window\.DeggCropPreview\s*=/, "js: window.DeggCropPreview экспортирован");
   has(JS, /PREVIEW_H/, "js: экспорт PREVIEW_H");
   has(JS, /getHitArea/, "js: экспорт getHitArea");
@@ -110,10 +126,10 @@ if (JS) {
   // beforeRegisterNodeDef регистрация
   has(JS, /app\.registerExtension/, "js: app.registerExtension");
   has(JS, /beforeRegisterNodeDef/, "js: beforeRegisterNodeDef");
-  has(JS, /nodeType\.prototype\.onNodeCreated/, "js: перехват onNodeCreated");
-  has(JS, /nodeType\.prototype\.onConnectionsChange/, "js: перехват onConnectionsChange");
-  has(JS, /nodeType\.prototype\.computeSize/, "js: перехват computeSize");
-  has(JS, /nodeType\.prototype\.computeLayoutSize/, "js: перехват computeLayoutSize (Nodes 2.0)");
+  has(JS, /proto\.onNodeCreated\s*=/, "js: перехват onNodeCreated");
+  has(JS, /proto\.onConnectionsChange\s*=/, "js: перехват onConnectionsChange");
+  has(JS, /proto\.computeSize\s*=/, "js: перехват computeSize");
+  has(JS, /proto\.computeLayoutSize\s*=/, "js: перехват computeLayoutSize (Nodes 2.0)");
 
   // НЕ должно быть старых хуков
   has(JS, /onWidgetChanged/, "js: onWidgetChanged для синка виджетов");

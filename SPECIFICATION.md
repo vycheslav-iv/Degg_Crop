@@ -4,10 +4,24 @@
 > правила синхронизации, тесты, ловушки. Читать вместе с `TASK.md`
 > (что делать) и `SESSION_MEMORY.md` (состояние).
 >
-> **Статус (2026-10-03): РЕАЛИЗОВАНО, НО РАМКА НЕ ПОЯВЛЯЕТСЯ В UI.**
-> Все проверки проходят (ЗЕЛЁНОЕ: провалов 0), синхронизировано в ComfyUI.
-> **Критический баг:** JS загружается, но `onInputsChanged` не срабатывает / `_imgW`/`_imgH` не инициализируются.
-> Debug-логи добавлены в JS для диагностики.
+> **Статус (2026-10-03): ИСПРАВЛЕНО И ПРОВЕРЕНО В БРАУЗЕРЕ.**
+> Баг «рамка не появляется» найден и устранён; аутпеинт (рамка за пределы
+> изображения) реализован и проверен в реальном браузере.
+> Все проверки зелёные: `check.py` (провалов 0), Python-тест, смоук, аудит,
+> живой замер (`tests/_probe_live_dom.py` — 32 ok, FAIL 0).
+>
+> **Три реальные причины бага** (проверено по исходникам фронтенда, скил
+> `comfyui-frontend-sources`):
+> 1. Фронтенд вызывает **`widget.draw(ctx, node, width, y, …)`** и
+>    **`widget.mouse(e, pos, node)`** — на САМОМ виджете. Всё, что лежало в
+>    `options.draw` / `options.mouse` / `options.computeSize`, **не вызывалось никогда**.
+>    (`LGraphNode.drawWidgets`, `LGraphCanvas.processWidgetClick`.)
+> 2. `window.comfyAPI.api` — это **пространство имён модуля**, сам клиент лежит в
+>    `window.comfyAPI.api.api` → URL картинки строился неверно и превью было пустым.
+> 3. Рамка была **зажата внутри изображения** (кламп в drag) — аутпеинт был невозможен.
+> 4. Хука `onInputsChanged` **во фронтенде не существует** — на него нельзя опираться.
+>
+> Источник теперь читается лениво в `draw()` (самолечение, без таймеров).
 
 ---
 
@@ -41,7 +55,7 @@
 |---|---|
 | `degg_crop.py` | Python нода: INPUT_TYPES (14 входов), pipeline, 4 выхода |
 | `__init__.py` | Маппинги + `WEB_DIRECTORY = "web"` |
-| `web/js/degg_crop.js` | **С debug-логами** — Nodes 2.0 preview, 9-зона hit-test, drag/resize, Ratio Presets, Full/Center/Max кнопки, `onInputsChanged`/`onWidgetChanged` |
+| `web/js/degg_crop.js` | Nodes 2.0 preview (top-level draw/mouse/computeSize, без клампа для аутпеинта, ленивая загрузка источника), 9-зона hit-test, Ratio Presets, Full/Center/Max |
 | `tests/_test_degg_crop.py` | Python E2E (реальный torch, автоперезапуск) |
 | `tests/_smoke_degg_crop.mjs` | JS-смоук в vm (ESM-совместимый) |
 | `tests/_audit_degg_crop.mjs` | Статический аудит (новая схема, Nodes 2.0) |
@@ -85,23 +99,26 @@
 
 `numpy` / `PIL` — **внутри** `_resize_lanczos` (с отступом). Аудит банит только колонку 0.
 
-## 4. JS-архитектура (`web/js/degg_crop.js`) — **С debug-логами**
+## 4. JS-архитектура (`web/js/degg_crop.js`)
 
-### 4.1. ESM-совместимый загрузчик `app`
+### 4.1. Bootstrap: `pickApp()` / `pickApi()`
 
 ```js
-console.log("[DeggCrop] === SCRIPT START ===");
-console.log("[DeggCrop] window.comfyAPI:", !!window.comfyAPI);
-console.log("[DeggCrop] window.app:", !!window.app);
-
-let app;
-if (window.comfyAPI && window.comfyAPI.app && window.comfyAPI.app.app) {
-  app = window.comfyAPI.app.app;
-} else if (window.app) {
-  app = window.app;
-} else { console.log("[DeggCrop] NO APP FOUND!"); }
-console.log("[DeggCrop] app:", !!app, "registerExtension:", !!(app && app.registerExtension));
+function pickApp() {
+  if (window.comfyAPI?.app?.app) return window.comfyAPI.app.app;  // экземпляр
+  if (window.app) return window.app;
+  return null;
+}
+function pickApi() {
+  if (window.comfyAPI?.api?.api) return window.comfyAPI.api.api;  // клиент!
+  if (window.comfyAPI?.api?.apiURL) return window.comfyAPI.api;   // fallback
+  if (window.api) return window.api;
+  return null;
+}
 ```
+
+⛔ `window.comfyAPI.api` — namespace модуля; клиент и URL-билдер — через
+**`comfyAPI.api.api`**. Debug-логов в коде больше НЕТ (удалены при переписке).
 
 ### 4.2. Регистрация расширения
 
@@ -111,7 +128,7 @@ if (app && app.registerExtension) {
     name: EXT_NAME,
     beforeRegisterNodeDef: (nodeType, nodeData) => {
       if (nodeData.name === "DeggCrop") {
-        // patch onNodeCreated, onConnectionsChange, onInputsChanged, onWidgetChanged
+        // patch onNodeCreated, onConnectionsChange, onWidgetChanged
         // computeSize, computeLayoutSize
       }
     }
@@ -121,18 +138,40 @@ if (app && app.registerExtension) {
 
 ### 4.3. Ключевые обработчики (пропатчены в прототипе)
 
-| Хук | Что делает | Debug-лог |
-|---|---|---|
-| `onNodeCreated` | Создаёт виджет `preview` (type=custom, serialize=false, computeLayoutSize/draw/mouse), вставляет первым. Добавляет `ratio_preset` combo + кнопки `fit_full/fit_center/fit_max`. Вызывает `updateImageDimensions()`. | `[DeggCrop] onNodeCreated called, node: <id>` |
-| `onInputsChanged` | **Критично** — читает подключённый вход `image`, извлекает `output.shape[1]/[2]` (H/W), инициализирует `_imgW`/`_imgH`, `_dragRect`, синхронизирует виджеты, обновляет ratio preset, `setDirtyCanvas()`. | `[DeggCrop] onInputsChanged called, node: <id>, inputs: [...]` |
-| `onWidgetChanged` | Обрабатывает x/y/width/height → `syncPropsFromWidgets`, пересчёт `_isExpandMode`. ratio_lock/aspect_ratio → sync. file → перезагрузка dimensions. | (нет) |
-| `onConnectionsChange` | Таймаут 100мс → `updateImageDimensions()` | (нет) |
+| Хук | Что делает |
+|---|---|
+| `onNodeCreated` | Создаёт виджет `preview` (type=custom, serialize=false, top-level computeSize/computeLayoutSize/draw/mouse), вставляет первым. Добавляет `ratio_preset` combo + кнопки `fit_full/fit_center/fit_max`. |
+| `onWidgetChanged` | Обрабатывает x/y/width/height → `syncPropsFromWidgets`, пересчёт Expand-режима. ratio_lock/aspect_ratio → sync. file → сброс кэша источника. |
+| `onConnectionsChange` | Помечает источник изменённым (`_srcDirty`) → перерисовка; дальнейшая загрузка лениво в `draw()`. |
 
-### 4.4. Виджет preview
+⛔ **Хука `onInputsChanged` во фронтенде НЕ существует** (проверено grep по
+всем `.map` sourcesContent пакета) — на него нельзя опираться.
+Источник читается **лениво в `draw()`** (`ensureImage`, мемоизация по URL),
+без таймеров и наблюдателей. Скил: `comfyui-frontend-namespaces`.
 
-- **type=custom**, serialize=false, `computeLayoutSize` (stretch для Nodes 2.0)
-- **draw**: сетка третьих + золотое сечение + белая рамка 2px + полупрозрачный fill + бейдж «W×H»
-- **mouse**: 9-зона hit-test (nw/ne/sw/se/n/s/e/w/move, порог 8px), drag/resize с ratio lock, clamp к границам изображения в Crop режиме
+### 4.4. Виджет preview (имя `degg_crop_preview`)
+
+⛔ **Контракт фронтенда:** `draw` / `mouse` / `computeSize` — на ВЕРХНЕМ уровне
+объекта виджета. `options.draw` / `options.mouse` фронтенд НЕ читает.
+
+- **type=custom**, `serialize:false`, `options.canvasOnly:true (не виден в панели свойств)
+- **computeSize(width) → [width, PREVIEW_H]** — фиксированная высота (без feedback loop)
+- **draw(ctx, node, width, y)**: рисует в координатах ноды (`ctx.translate(0, y)`),
+  запоминает `node._previewY = y` и `node._layout` (нужно для hit-test),
+  лениво подгружает источник (`ensureImage`)
+- **mouse(e, pos, node)**: 9-зона hit-test (nw/ne/sw/se/n/s/e/w/move, порог 8px)
+- **onMouseMove ноды** — hover-курсор и продолжение drag
+
+### 4.4.1. Аутпеинт (рамка за пределы изображения)
+
+- **Клампа НЕТ.** `move` тянет окно свободно, в т.ч. в отрицательные x/y.
+- `computeLayout` вписывает в превью **объединение** изображения и окна —
+  рамка, выдвинутая за картинку, всегда видна.
+- Область за окном и вне изображения заливается цветом `fill_color` (превью),
+  а в Python она заполняется `fill_color` на холсте width×height.
+- Цвет рамки: зелёный (Crop) → голубой (Expand).
+- Пиксельные поля `x/y/width/height` задают то же самое точно: отрицательные
+  `x/y` + увеличенные `width/height` = поля аутпеинта (как «Pad Image for Outpainting»).
 
 ### 4.5. Ratio Presets
 
@@ -140,12 +179,18 @@ Combo `ratio_preset` (вставлен после `aspect_ratio`):
 - Custom, Free (Source), 1:1, 4:3, 3:4, 16:9, 9:16, 2:3, 3:2, 21:9
 - Callback → обновляет `aspect_ratio` + `ratio_lock` → `applyAspectRatio()` → пересчитывает width/height из `_imgW`/`_imgH` → `syncWidgetsFromProps`
 
-### 4.6. Загрузка изображения (`updateImageDimensions`)
+### 4.6. Загрузка изображения (`resolveImageUrl` + `ensureImage`)
+
+Лениво в `draw()`: URL резолвится по проводам (`graph.links.get(id)`, рекурсия),
+затем `Image.onload` → `_imgW`/`_imgH` → `setDirtyCanvas()`.
 
 Источники (в порядке приоритета):
-1. Подключённый вход `image` → `tensor:` URL → читает `output.shape` из upstream
-2. LoadImage нода → `/view?filename=...&type=output` → Image.onload → натуральные W/H
-3. File widget → `/view?filename=...&type=input` → Image.onload
+1. Подключённый вход `image` → upstream-нода (LoadImage → `/view?...&type=output`,
+   другая Degg_Crop → её результат, generic → `imgs`/`tensor:`)
+2. File widget → `/view?filename=...&type=input` → Image.onload
+
+URL строится **`window.comfyAPI.api.api.apiURL(path)`** (namespace → клиент);
+в этом билде даёт относительный `/api/view?...`.
 
 ### 4.7. Константы
 
@@ -163,33 +208,27 @@ Combo `ratio_preset` (вставлен после `aspect_ratio`):
 | Python | `python tests/_test_degg_crop.py` | `ИТОГО: ок=14 FAIL=0` + `ТЕСТ ПРОЙДЕН` |
 | JS Smoke | `node tests/_smoke_degg_crop.mjs` | `SMOKE OK`, `FAIL=0` |
 | Audit | `node tests/_audit_degg_crop.mjs` | `аудит чист`, `FAIL=0` |
+| Живая проба | `python tests/_probe_live_dom.py` (нужен запущенный ComfyUI + headless Chrome) | `ok: 32 FAIL: 0` |
 | check.py | `python _process/check.py Degg_Crop` | `ЗЕЛЁНОЕ: провалов 0` |
 
 ## 7. Известные проблемы (КРИТИЧНО)
 
-### 7.1. Рамка не появляется в UI
-**Симптомы:** Нода создаётся, но `_imgW`/`_imgH` остаются `undefined`, превью показывает "No image", рамки нет.
-**Debug-логи добавлены** — после перезапуска ComfyUI в F12 Console должны появиться:
-```
-[DeggCrop] === SCRIPT START ===
-[DeggCrop] window.comfyAPI: true
-[DeggCrop] Got app from comfyAPI.app.app
-[DeggCrop] Extension loading, app: true registerExtension: true
-[DeggCrop] onNodeCreated called, node: <id>
-[DeggCrop] onInputsChanged called, node: <id>, inputs: [...]
-```
-**Если логов 1-3 нет** — скрипт не загружается (кэш/путь).
-**Если 4 нет** — `app.registerExtension` недоступен.
-**Если 5 нет** — `beforeRegisterNodeDef` не сработал (имя ноды не "DeggCrop").
-**Если 6 нет** — `onInputsChanged` не вызывается ComfyUI для этого типа входа.
+### 7.1. Рамка не появляется в UI — ИСПРАВЛЕНО
 
-### 7.2. OreX Crop работает — разница в механике
-OreX использует `onNodeCreated` + ручная подписка на события графа. Degg_Crop полагается на `onInputsChanged` — возможно, ComfyUI не вызывает его для `IMAGE` входа.
+> Ниже — историческое описание бага. Он устранён (см. блок статуса выше):
+> `draw`/`mouse`/`computeSize` перенесены на верхний уровень виджета, `api`
+> берётся из `comfyAPI.api.api`, кламп рамки убран.
 
-**Следующий шаг для новой модели:** сравнить с OreX_Crop.js (как там получают изображение) и либо:
-- Добавить `setInterval` поллинг `node.inputs[0]?.link` в `onNodeCreated`
-- Использовать `app.graph.on("graphchange", ...)` как в OreX
-- Проверить, вызывает ли ComfyUI `onInputsChanged` для `IMAGE` сокетов
+**Симптомы (было):** нода создавалась, но `_imgW`/`_imgH` оставались `undefined`, превью показывало "No image", рамки не было.
+**Вывод диагностики:** отсутствие вызовов `draw`/`mouse` объяснялось тем, что они лежали в `options` (фронтенд их не читает), а не проблемами кэша/событий.
+
+### 7.2. OreX Crop работает — разница в механике (разобрано)
+
+> OreX_Crop.js складывает `draw`/`mouse`/`computeSize` **на верхнем уровне**
+> виджета — именно поэтому он работает. `onInputsChanged` во фронтенде нет;
+> OreX читает источник прямо в `draw()` через `getImageUrl(node)`.
+
+**Вывод:** Degg_Crop переписан по той же механике (top-level коллбэки, ленивый источник в `draw()`, `graph.links.get`).
 
 ## 8. Команды
 
@@ -208,9 +247,14 @@ python sync.py Degg_Crop                  # 6 файлов в ComfyUI
 ## 9. Файлы для передачи новой модели
 
 - `degg_crop.py` — Python (рабочий, тесты зелёные)
-- `web/js/degg_crop.js` — JS с debug-логами (требует фикса рамки)
+- `web/js/degg_crop.js` — JS (переписан, все проверки зелёные)
 - `locales/ru/nodeDefs.json`, `locales/en/nodeDefs.json` — переводы
-- `tests/_test_degg_crop.py`, `_smoke_degg_crop.mjs`, `_audit_degg_crop.mjs` — тесты
+- `tests/_test_degg_crop.py`, `_smoke_degg_crop.mjs`, `_audit_degg_crop.mjs`,
+  `_probe_live_dom.py` (живой CDP-замер, нужен запущенный ComfyUI)
 - `check.json` — не менять
 - `SPECIFICATION.md` — этот файл
 - `SESSION_MEMORY.md` — состояние сессии
+
+Скилы (корень бандла, `.agents/skills/`): `comfyui-custom-widget-contract`,
+`comfyui-frontend-namespaces`, `comfyui-frontend-sources`,
+`comfyui-negative-result-audit`.
