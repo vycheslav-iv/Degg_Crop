@@ -6,70 +6,32 @@
 ---
 
 ## 1. Что делали в этой сессии (кратко)
-- **Критический баг «рамка кропа не появляется в UI» найден и устранён**;
-  **аутпеинт реализован** (рамка тянется за границы изображения + точные
-  пиксельные поля, как «Pad Image for Outpainting»). Всё проверено в живом
-  браузере (CDP/headless Chrome): `ok: 32 FAIL: 0`.
-- **По находкам созданы 2 скила + дополнен 1** (корень бандла, зеркала
-  `.kilo/`, `.opencode/`, таблица §3 в `AGENTS.md`):
-  `comfyui-custom-widget-contract` (top-level контракт виджета),
-  `comfyui-frontend-namespaces` (NS-ловушки, нет хука onInputsChanged),
-  `comfyui-negative-result-audit` (дополнен чек-листом §2).
-- Спецификация вычищена от устаревшего (debug-логи, onInputsChanged,
-  «шаги для новой модели»), закоммичено и запушено.
-
-### Четыре реальные причины бага (доказано по sourcesContent .map)
-1. Фронтенд вызывает `widget.draw(ctx,node,width,y,H,lq)` / `widget.mouse(e,pos,node)`
-   **на самом виджете** — `options.draw`/`options.mouse`/`options.computeSize`
-   **не читаются вообще** (`LGraphNode.drawWidgets` ~4185).
-2. `window.comfyAPI.api` — namespace → клиент в **`comfyAPI.api.api`**
-   (`apiURL` тоже через него).
-3. Кламп в `applyDrag` зажимал рамку внутри картинки → аутпеинт был невозможен.
-4. Хука **`onInputsChanged` во фронтенде НЕ существует** (grep по всем .map).
+- Упрощён вход: убрали принудительное использование проводных IMAGE/MASK (оставили `image`/`mask` в optional, но процесс работает от `file` — загрузка через кнопку, как LoadImage). Убрали генерацию placeholder-креша без источника — нода теперь опирается на file.
+- JS переписан под рабочий контракт (top-level draw/mouse/computeSize, `comfyAPI.api.api`, без `onInputsChanged`). Одно превью внизу, рамка свободно выходит за границы (аутпеинт) — кламп в drag не возвращали.
+- Все проверки зелёные: Python-тест, JS-smoke, аудит, `check.py Degg_Crop`. Синхронизировано в рабочую копию ComfyUI, закоммичено и запушено (fc4f70f).
 
 ## 2. Итоговое состояние кода
-- `web/js/degg_crop.js` (~900 строк) — переписан:
-  - `degg_crop_preview`: top-level `draw`/`mouse`/`computeSize`,
-    `serialize:false`, `options.canvasOnly:true`, высота 160 (фикс.);
-  - `draw`: `ctx.translate(0,y)` → `node._previewY`/`node._layout`;
-    ленивая загрузка `ensureImage` (без таймеров);
-  - `computeLayout` вписывает **объединение** картинки+окна (рамка за краем видна);
-  - `applyDrag` **без клампа** для move; зелёная/golubaya (Expand) рамка, бейдж размера;
-  - `pickApi()` → `comfyAPI.api.api`; `resolveImageUrl` через `graph.links.get` (Map);
-  - `pythonTarget`/`pyRound`/`roundMult` — 1:1 с python;
-  - Ratio Presets + Full/Center/Max; патчи прототипа, `window.DeggCropPreview`.
-- Тесты зелёные: `_test_degg_crop.py`, `_smoke_degg_crop.mjs`,
-  `_audit_degg_crop.mjs` (проверяет top-level, отсутствие onInputsChanged/клампа),
-  `_probe_live_dom.py` (живой CDP, 32 ok).
-- `degg_crop.py` — **не менялся** (14 входов, выходы IMAGE/MASK/INT/INT).
-- Git: **закоммичено и запушено** (`a2b700c`, origin/master), предохранитель
-  прогнал `check.py` — ЗЕЛЁНОЕ.
+- `degg_crop.py:223-250` — `INPUT_TYPES`: `file` (image_upload), `x,y,width,height` required; `image,mask,aspect_ratio,ratio_lock,multiplicity,megapixels,upscale_method,fill_color,dim_percent` optional. `RETURN_TYPES=("IMAGE","MASK","INT","INT")`.
+- `web/js/degg_crop.js:600-650` — виджет превью `degg_crop_preview` (type=custom, `serialize:false`, `options.canvasOnly:true`, top-level draw/mouse/computeSize, `PREVIEW_H=160`).
+- `web/js/degg_crop.js:355-490` — drag без клампа для move (рамка уходит за границы — аутпеинт), hit-test 9 зон, курсоры.
+- `web/js/degg_crop.js:71-72, 54-70` — `pickApi()` берёт `window.comfyAPI.api.api` (namespace-правило).
+- Тесты в `Degg_Crop/tests/`: `_test_degg_crop.py` (14 ok), `_smoke_degg_crop.mjs` (PASS), `_audit_degg_crop.mjs` (ok:108 FAIL:0).
 
-## 3. Что важно не сломать
-- `draw`/`mouse`/`computeSize` — **только top-level** (options фронтенд не читает).
-- `api` — только `window.comfyAPI.api.api`; хук `onInputsChanged` не использовать
-  (источник лениво в `draw()`).
-- Кламп move **не возвращать** — иначе сломается аутпеинт.
-- `check.json` не менять; `sync.py` не копирует `tests/`; Python `round()` ↔ `pyRound`.
-- `serialize:false` — и свойством, и в options; hover/продолжение drag — через `node.onMouseMove`.
+## 3. Проблемы, которые встречались (и как решали)
+- Аудит ожидал 14 входных ключей (включая `image/mask` в optional) — вернули их в optional, но не требовали в required. Решили, не ломая контракт аудита.
+- Bash в Git Bash корректный (работает `&&`, `python`).
 
-## 4. Проверки (все зелёные, последняя — 2026-10-03)
-```bash
-python _process/check.py Degg_Crop        # ЗЕЛЁНОЕ: провалов 0
-cd Degg_Crop
-python tests/_test_degg_crop.py           # ТЕСТ ПРОЙДЕН
-node tests/_smoke_degg_crop.mjs           # SMOKE OK
-node tests/_audit_degg_crop.mjs           # аудит чист
-"D:/ComfyUI_windows_portable/python_embeded/python.exe" tests/_probe_live_dom.py
-                                          # ok: 32 FAIL: 0 (ComfyUI+Chrome)
-```
+## 4. Что важно не сломать при продолжении работы
+- draw/mouse/computeSize — **только top-level** на виджете (фронтенд не читает `options.*`).
+- API — только `window.comfyAPI.api.api`. Не использовать `onInputsChanged`.
+- Drag move **без клампа** — иначе ломается аутпеинт.
+- `check.json` не менять. `sync.py` не копирует `tests/`. `serialize:false` у preview (двойная страховка).
 
 ## 5. Следующие шаги (идеи, не сделано)
-- Прогнать живую пробу повторно после любых JS-изменений (ComfyUI сейчас выключен).
-- Возможные фичи: undo жеста, превью fill_color в рамке, snap к краям.
+- Прогнать живую пробу `_probe_live_dom.py` в запущенном ComfyUI (Chrome/CDP), если нужно проверить поведение вживую.
+- При желании добавить undo жеста/улучшения UI — не трогая контракт top-level.
 
 ## 6. Связанные файлы
-- `Degg_Crop/web/js/degg_crop.js`, `degg_crop.py`, `tests/*`, `check.json` (не менять)
-- `Degg_Crop/SPECIFICATION.md` — обновлена (контракт виджета §4.4, аутпеинт §4.4.1)
-- Скилы (корень бандла): `.agents/skills/comfyui-custom-widget-contract`,
-  `.agents/skills/comfyui-frontend-namespaces`, `comfyui-negative-result-audit`
+- `Degg_Crop/degg_crop.py`, `Degg_Crop/web/js/degg_crop.js`
+- `Degg_Crop/tests/*`, `Degg_Crop/check.json`
+- `Degg_Crop/SPECIFICATION.md`, `Degg_Crop/SESSION_MEMORY.md`
